@@ -5,6 +5,7 @@
  * search filtering, and interactive full-screen story viewing.
  */
 import React, { useState, useEffect } from 'react';
+import { DeviceEventEmitter } from 'react-native';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   FlatList, ScrollView, Image, Modal, Dimensions, SafeAreaView, Platform,
@@ -14,7 +15,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Gradients, Shadows } from '../constants/colors';
 import { useI18n } from '../i18n';
 import type { Friend } from '../constants/data';
-import { FRIENDS } from '../constants/data';
+import {
+  getFriends,
+  getFriendSuggestions,
+  getFriendRequests,
+  getSentRequests,
+  requestFriend,
+  type FriendSummary,
+} from '../services/friendsApi';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -62,6 +70,11 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState('');
+  const [friends, setFriends] = useState<FriendSummary[]>([]);
+  const [suggestions, setSuggestions] = useState<FriendSummary[]>([]);
+  const [friendRequests, setFriendRequests] = useState<FriendSummary[]>([]);
+  const [sentRequests, setSentRequests] = useState<FriendSummary[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Story state
   const [myStory, setMyStory] = useState<string | null>(null);
@@ -74,17 +87,36 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
   const [newStoryText, setNewStoryText] = useState('');
   const [storyBgGrad, setStoryBgGrad] = useState(0);
 
-  // Compile active friends & stories list
-  const friendsWithStatus = FRIENDS.map(f => ({
-    ...f,
-    avatar: MOCK_AVATARS[f.id] || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop',
-    lastMsg: MOCK_CHAT_DETAILS[f.id]?.message || 'Start chatting now!',
-    lastTime: MOCK_CHAT_DETAILS[f.id]?.time || '10:00 am',
-    hasStory: !!MOCK_STORIES[f.id],
-    storyImg: MOCK_STORIES[f.id] || '',
-  }));
+  type FriendView = Friend & { avatar: string; lastMsg: string; lastTime: string; hasStory: boolean; storyImg: string };
 
-  // Dynamic search filtering
+  const mapFriendSummary = (item: FriendSummary): FriendView => {
+    const name = item.displayName || item.username;
+    const status = item.mutualFriendsCount && item.mutualFriendsCount > 0 ? 'active' : 'idle';
+    const hash = item.userId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const x = 20 + (hash % 60);
+    const y = 20 + ((hash >> 3) % 60);
+    const avatar = item.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&h=150&fit=crop';
+
+    return {
+      id: item.userId,
+      name,
+      emoji: '👋',
+      color: '#7CC4FF',
+      place: item.mutualFriendsCount ? `${item.mutualFriendsCount} mutual` : 'Friend',
+      distance: item.requestedAt ? 'Requested' : 'Online',
+      status: status as 'active' | 'idle' | 'moving',
+      battery: 100,
+      x,
+      y,
+      avatar,
+      lastMsg: item.requestedAt ? 'Request pending' : 'Say hello',
+      lastTime: item.requestedAt ? new Date(item.requestedAt).toLocaleDateString() : 'Now',
+      hasStory: false,
+      storyImg: '',
+    };
+  };
+
+  const friendsWithStatus = friends.map(mapFriendSummary);
   const filteredFriends = friendsWithStatus.filter(f =>
     f.name.toLowerCase().includes(query.toLowerCase())
   );
@@ -154,6 +186,40 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
     setIsCreateStoryOpen(false);
     Toast.show({ type: 'success', text1: 'Đã đăng story thành công! ✨' });
   };
+
+  const fetchFriendData = async () => {
+    setIsLoading(true);
+    try {
+      const [friendsRes, suggestionsRes, requestsRes, sentRes] = await Promise.all([
+        getFriends(),
+        getFriendSuggestions(),
+        getFriendRequests(),
+        getSentRequests(),
+      ]);
+      setFriends(friendsRes);
+      setSuggestions(suggestionsRes);
+      setFriendRequests(requestsRes);
+      setSentRequests(sentRes);
+    } catch (error) {
+      Toast.show({ type: 'error', text1: String(error instanceof Error ? error.message : 'Unable to load friends') });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchFriendData();
+    const sub = DeviceEventEmitter.addListener('friend:accepted', () => {
+      fetchFriendData();
+    });
+    const sub2 = DeviceEventEmitter.addListener('friends:refetch', () => {
+      fetchFriendData();
+    });
+    return () => {
+      sub.remove();
+      sub2.remove();
+    };
+  }, []);
 
   const grads = [
     ['#9C7CFF', '#7C5BFF'], // Purple

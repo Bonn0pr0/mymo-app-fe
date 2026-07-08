@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   View, Text, Modal, TouchableOpacity, StyleSheet, Animated,
   ScrollView, TextInput, KeyboardAvoidingView, Platform,
@@ -10,6 +10,8 @@ import { Colors, Gradients, Shadows } from '../constants/colors';
 import { useI18n } from '../i18n';
 import SparkleField from './SparkleField';
 import Toast from 'react-native-toast-message';
+import { requestFriend } from '../services/friendsApi';
+import { getStoredAuthSession } from '../services/authApi';
 
 interface AddFriendSheetProps {
   onClose: () => void;
@@ -18,7 +20,7 @@ interface AddFriendSheetProps {
 export default function AddFriendSheet({ onClose }: AddFriendSheetProps) {
   const { t } = useI18n();
   const [link, setLink] = React.useState('');
-  const myLink = 'mymo.app/u/you.mymo';
+  const [myLink, setMyLink] = useState('mymo.app/u/you.mymo');
   const slideAnim = useRef(new Animated.Value(400)).current;
 
   const useNativeDriver = Platform.OS !== 'web';
@@ -30,7 +32,16 @@ export default function AddFriendSheet({ onClose }: AddFriendSheetProps) {
       tension: 65,
       friction: 11,
     }).start();
+
+    (async () => {
+      const session = await getStoredAuthSession();
+      if (!session) return;
+      const profileId = session.userId || session.username || 'you.mymo';
+      setMyLink(`mymo.app/u/${profileId}`);
+    })();
   }, [slideAnim, useNativeDriver]);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const close = () => {
     Animated.timing(slideAnim, {
@@ -40,16 +51,42 @@ export default function AddFriendSheet({ onClose }: AddFriendSheetProps) {
     }).start(onClose);
   };
 
-  const submit = () => {
+  const submit = async () => {
     const v = link.trim();
-    if (!v || !v.includes('mymo.app')) {
+    let userId: string | null = null;
+
+    if (!v) {
       Toast.show({ type: 'error', text1: t('addFriend.invalid') });
       return;
     }
-    const handle = v.split('/').pop() || 'friend';
-    Toast.show({ type: 'success', text1: `${t('addFriend.sent')} @${handle}` });
-    setLink('');
-    close();
+
+    if (v.includes('mymo.app')) {
+      userId = v.split('/').pop() || null;
+    } else {
+      userId = v;
+    }
+
+    if (!userId) {
+      Toast.show({ type: 'error', text1: t('addFriend.invalid') });
+      return;
+    }
+
+    if (userId === 'you.mymo') {
+      const session = await getStoredAuthSession();
+      userId = session?.userId || userId;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await requestFriend(userId);
+      Toast.show({ type: 'success', text1: `${t('addFriend.sent')} @${userId}` });
+      setLink('');
+      close();
+    } catch (error) {
+      Toast.show({ type: 'error', text1: String(error instanceof Error ? error.message : 'Unable to send request') });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const copy = async () => {
@@ -71,6 +108,9 @@ export default function AddFriendSheet({ onClose }: AddFriendSheetProps) {
         <Animated.View style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}>
           <SparkleField count={10} />
           <View style={styles.handle} />
+          <TouchableOpacity onPress={close} style={styles.sheetCloseBtn} accessibilityLabel="Close">
+            <Ionicons name="close" size={18} color={Colors.textMuted} />
+          </TouchableOpacity>
 
           <LinearGradient colors={Gradients.primary} style={styles.iconWrap} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
             <Ionicons name="person-add" size={28} color={Colors.white} />
@@ -99,9 +139,9 @@ export default function AddFriendSheet({ onClose }: AddFriendSheetProps) {
               </TouchableOpacity>
             )}
           </View>
-          <TouchableOpacity onPress={submit} activeOpacity={0.85} style={styles.sendBtn}>
+          <TouchableOpacity onPress={submit} activeOpacity={0.85} style={styles.sendBtn} disabled={isSubmitting}>
             <LinearGradient colors={Gradients.primary} style={styles.sendGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-              <Text style={styles.sendText}>{t('addFriend.send')}</Text>
+              <Text style={styles.sendText}>{isSubmitting ? t('common.sending') : t('addFriend.send')}</Text>
             </LinearGradient>
           </TouchableOpacity>
 
@@ -151,6 +191,17 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: Colors.primarySoft,
     marginBottom: 20,
+  },
+  sheetCloseBtn: {
+    position: 'absolute',
+    right: 18,
+    top: 18,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
   },
   iconWrap: {
     width: 64,

@@ -4,7 +4,7 @@
  * Includes layout limits for web app view, dynamic tab filtering (All, Likes, Requests),
  * Unsplash profile pictures, and glassmorphism styling.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
   FlatList, RefreshControl, Image, Platform,
@@ -13,8 +13,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, Gradients, Shadows } from '../constants/colors';
 import { useI18n } from '../i18n';
-import { NOTIFS } from '../constants/data';
 import type { Notif } from '../constants/data';
+import { getFriendRequests, acceptFriend, rejectFriend } from '../services/friendsApi';
+import { getNotifications, getUnreadCount, markAsRead, markAllRead, deleteNotification } from '../services/notificationsApi';
+import { DeviceEventEmitter } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,28 +37,96 @@ export default function NotificationsScreen() {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   
-  const [items, setItems] = useState<Notif[]>(NOTIFS);
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState<NotifFilter>('all');
+  const [friendRequests, setFriendRequests] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number | null>(null);
 
   const remove = (id: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setItems(s => s.filter(x => x.id !== id));
+    setNotifications(s => s.filter(x => x.id !== id));
+    setFriendRequests(s => s.filter(fr => {
+      const requestId = resolveFriendRequestId(fr);
+      return requestId !== id;
+    }));
   };
 
-  const clearAll = () => {
+  const clearAll = async () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setItems([]);
+    try {
+      await markAllRead();
+    } catch (err) {
+      // ignore
+    }
+    setNotifications([]);
+    setFriendRequests([]);
     Toast.show({ type: 'success', text1: t('notif.allDone') });
   };
 
   const handleRefresh = () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 800);
+    Promise.all([fetchRequests(), fetchNotifications()])
+      .catch(() => {})
+      .finally(() => setRefreshing(false));
   };
 
-  // Filter notifs dynamically
-  const filteredItems = items.filter(n => {
+  const fetchRequests = async () => {
+    try {
+      const res = await getFriendRequests();
+      setFriendRequests(res || []);
+    } catch (err) {
+      // ignore — keep mock UI
+    }
+  };
+
+  const fetchNotifications = async () => {
+    try {
+      const res = await getNotifications();
+      setNotifications(res || []);
+      const uc = await getUnreadCount();
+      setUnreadCount(uc);
+    } catch (err) {
+      // ignore for now
+    }
+  };
+
+  const resolveFriendRequestId = (fr: any) =>
+    fr.userId || fr.id || fr.user_id || fr.friendId || fr.requestId || fr.targetId || fr.senderId || fr.fromUserId || fr.toUserId || fr.requesterId || fr.recipientId || fr.user?.id || fr.from?.id || fr.sender?.id;
+
+  const resolveFriendRequestName = (fr: any) =>
+    fr.displayName || fr.username || fr.name || fr.user?.displayName || fr.user?.username || fr.from?.displayName || fr.from?.username || fr.sender?.displayName || fr.sender?.username || fr.userId || fr.id;
+
+  const resolveFriendRequestTime = (fr: any) =>
+    fr.requestedAt || fr.createdAt || fr.created_at || fr.updatedAt || fr.updated_at || fr.timestamp;
+
+  useEffect(() => {
+    fetchRequests();
+    fetchNotifications();
+  }, []);
+
+  const allNotificationItems = [
+    ...notifications.map(nt => ({
+      id: nt.id,
+      type: nt.type || 'info',
+      who: nt.title || nt.body || nt.id,
+      emoji: '🔔',
+      textKey: nt.body || 'notif.text.generic',
+      time: nt.createdAt ? new Date(nt.createdAt).toLocaleString() : t('common.now'),
+      raw: nt,
+    } as Notif & { raw?: any })),
+    ...friendRequests.map(fr => ({
+      id: resolveFriendRequestId(fr),
+      type: 'request' as const,
+      who: resolveFriendRequestName(fr) || 'Friend',
+      emoji: '👋',
+      textKey: 'notif.text.request',
+      time: resolveFriendRequestTime(fr) ? new Date(resolveFriendRequestTime(fr)).toLocaleString() : t('common.now'),
+      raw: fr,
+    } as Notif & { raw?: any })),
+  ].filter(item => !!item.id);
+
+  const filteredItems = allNotificationItems.filter(n => {
     if (activeFilter === 'requests') return n.type === 'request';
     if (activeFilter === 'likes') return n.type === 'like';
     return true;
@@ -70,7 +140,7 @@ export default function NotificationsScreen() {
           <Text style={styles.title}>{t('notif.title')}</Text>
           <Text style={styles.subtitle}>{t('notif.subtitle')}</Text>
         </View>
-        {items.length > 0 && (
+        {allNotificationItems.length > 0 && (
           <TouchableOpacity onPress={clearAll} style={styles.clearBtn} activeOpacity={0.8}>
             <Text style={styles.clearText}>{t('common.clear')}</Text>
           </TouchableOpacity>
@@ -81,7 +151,7 @@ export default function NotificationsScreen() {
       <View style={styles.filterRow}>
         {(['all', 'requests', 'likes'] as NotifFilter[]).map(filter => {
           const isActive = activeFilter === filter;
-          const count = items.filter(n => {
+          const count = allNotificationItems.filter(n => {
             if (filter === 'requests') return n.type === 'request';
             if (filter === 'likes') return n.type === 'like';
             return true;
@@ -103,9 +173,7 @@ export default function NotificationsScreen() {
                   </Text>
                 </LinearGradient>
               ) : (
-                <Text style={styles.filterTabText}>
-                  {filter === 'all' ? 'Tất cả' : filter === 'requests' ? 'Yêu cầu' : 'Yêu thích'} ({count})
-                </Text>
+                <Text style={styles.filterTabText}>{filter === 'all' ? 'Tất cả' : filter === 'requests' ? 'Yêu cầu' : 'Yêu thích'}</Text>
               )}
             </TouchableOpacity>
           );
@@ -132,19 +200,67 @@ export default function NotificationsScreen() {
           <NotifItem
             notif={n}
             onPress={() => {
+              // default press behaviour: show toast and dismiss
               if (n.type === 'request') {
-                Toast.show({ type: 'success', text1: `${n.who} ${t('notif.accepted')}` });
-                remove(n.id);
+                Toast.show({ type: 'info', text1: `${n.who} ${t('notif.requests')}` });
               } else {
                 Toast.show({ type: 'info', text1: n.who, text2: t(n.textKey) });
-                remove(n.id);
               }
             }}
-            onAccept={() => {
-              Toast.show({ type: 'success', text1: `${n.who} ${t('notif.accepted')}` });
-              remove(n.id);
+            onAccept={async () => {
+              const friendId = (n as any).id || (n as any).userId || (n as any).user_id || (n as any).friendId || (n as any).requestId || (n as any).targetId || (n as any).senderId || (n as any).fromUserId || (n as any).toUserId || (n as any).requesterId || (n as any).recipientId || (n as any).user?.id || (n as any).from?.id || (n as any).sender?.id || (n as any).raw?.senderId || (n as any).raw?.referenceId;
+              if (!friendId) {
+                console.warn('accept called but no friend id available for notif:', n);
+                Toast.show({ type: 'error', text1: t('notif.missingId') || 'Missing friend id' });
+                return;
+              }
+
+                if (activeFilter === 'requests') {
+                  try {
+                    await acceptFriend(friendId);
+                    setFriendRequests(s => s.filter(x => (x.userId || x.id || x.user_id) !== friendId));
+                    // notify other screens to refresh friends list
+                    DeviceEventEmitter.emit('friend:accepted', { userId: friendId });
+                    Toast.show({ type: 'success', text1: `${n.who} ${t('notif.accepted')}` });
+                  } catch (err) {
+                    Toast.show({ type: 'error', text1: String(err instanceof Error ? err.message : 'Unable to accept') });
+                  }
+                } else {
+                  Toast.show({ type: 'success', text1: `${n.who} ${t('notif.accepted')}` });
+                  remove(friendId);
+                }
+              }}
+            onDismiss={async () => {
+              const targetId = (n as any).id || (n as any).userId || (n as any).user_id;
+              if (activeFilter === 'requests') {
+                if (!targetId) {
+                  console.warn('reject called but no id for notif:', n);
+                  Toast.show({ type: 'error', text1: t('notif.missingId') || 'Missing friend id' });
+                  return;
+                }
+                try {
+                  await rejectFriend(targetId);
+                  setFriendRequests(s => s.filter(x => (x.userId || x.id || x.user_id) !== targetId));
+                  Toast.show({ type: 'info', text1: `${t('friends.dismissed')} ${n.who}` });
+                } catch (err) {
+                  Toast.show({ type: 'error', text1: String(err instanceof Error ? err.message : 'Unable to reject') });
+                }
+              } else {
+                // if this item came from notifications API, delete it server-side; otherwise just remove
+                if (notifications.find(x => x.id === targetId)) {
+                  try {
+                    if (!targetId) throw new Error('missing id');
+                    await deleteNotification(targetId);
+                    setNotifications(s => s.filter(x => x.id !== targetId));
+                    Toast.show({ type: 'info', text1: t('notif.deleted') });
+                  } catch (err) {
+                    Toast.show({ type: 'error', text1: String(err instanceof Error ? err.message : 'Unable to delete') });
+                  }
+                } else {
+                  remove(targetId || n.id);
+                }
+              }
             }}
-            onDismiss={() => remove(n.id)}
           />
         )}
       />
@@ -186,30 +302,34 @@ function NotifItem({ notif, onPress, onAccept, onDismiss }: NotifItemProps) {
 
       {/* Right side interactive actions */}
       <View style={styles.actionCol}>
-        {notif.type === 'request' ? (
-          <TouchableOpacity onPress={onAccept} activeOpacity={0.8} style={styles.acceptBtn}>
-            <LinearGradient colors={Gradients.primary as any} style={styles.acceptGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-              <Text style={styles.acceptText}>{t('common.accept')}</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-        ) : notif.type === 'like' ? (
-          <View style={styles.likeBadge}>
-            <Ionicons name="heart" size={16} color="#FF3D6E" />
-          </View>
-        ) : notif.type === 'nearby' ? (
-          <View style={[styles.likeBadge, { backgroundColor: '#EEF2FF' }]}>
-            <Ionicons name="navigate" size={16} color={Colors.primary} />
+        {notif.type === 'request' || ((notif as any).title && (notif as any).title.toLowerCase().includes('new friend request')) ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity onPress={onAccept} activeOpacity={0.8} style={styles.acceptBtn}>
+              <LinearGradient colors={Gradients.primary as any} style={styles.acceptGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+                <Text style={styles.acceptText}>{t('common.accept')}</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={onDismiss} activeOpacity={0.8} style={styles.rejectBtn}>
+              <Text style={styles.rejectText}>{t('common.reject') || 'Từ chối'}</Text>
+            </TouchableOpacity>
           </View>
         ) : (
-          <View style={[styles.likeBadge, { backgroundColor: '#F0FDF4' }]}>
-            <Ionicons name="chatbubble" size={16} color="#22C55E" />
-          </View>
+          // Non-request notifications: display a simple badge and no action buttons
+          notif.type === 'like' ? (
+            <View style={styles.likeBadge}>
+              <Ionicons name="heart" size={16} color="#FF3D6E" />
+            </View>
+          ) : notif.type === 'nearby' ? (
+            <View style={[styles.likeBadge, { backgroundColor: '#EEF2FF' }]}>
+              <Ionicons name="navigate" size={16} color={Colors.primary} />
+            </View>
+          ) : (
+            <View style={[styles.likeBadge, { backgroundColor: '#F0FDF4' }]}>
+              <Ionicons name="chatbubble" size={16} color="#22C55E" />
+            </View>
+          )
         )}
-        
-        {/* Close/Dismiss Button */}
-        <TouchableOpacity onPress={onDismiss} style={styles.dismissBtn}>
-          <Ionicons name="close" size={14} color={Colors.textMuted} />
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -428,6 +548,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF0F3',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  rejectBtn: {
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#FFF',
+    borderWidth: 1,
+    borderColor: '#F3E8FF',
+  },
+  rejectText: {
+    color: Colors.textMuted,
+    fontWeight: '800',
+    fontSize: 10,
   },
   dismissBtn: {
     padding: 3,

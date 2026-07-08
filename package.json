@@ -14,6 +14,7 @@
     "expo-clipboard": "~56.0.4",
     "expo-dev-client": "~56.0.22",
     "expo-haptics": "~56.0.3",
+    "expo-image-picker": "^56.0.20",
     "expo-linear-gradient": "~56.0.4",
     "expo-status-bar": "~56.0.4",
     "mapbox-gl": "^2.15.0",

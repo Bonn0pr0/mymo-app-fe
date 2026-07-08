@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ScrollView, KeyboardAvoidingView, Platform, Image,
+  ActivityIndicator, Modal,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +11,7 @@ import { useI18n } from '../i18n';
 import type { Lang } from '../i18n';
 import SparkleField from '../components/SparkleField';
 import Toast from 'react-native-toast-message';
+import { loginUser, registerUser, saveAuthSession } from '../services/authApi';
 
 interface AuthScreenProps {
   onContinue: () => void;
@@ -19,14 +21,36 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
   const { t, lang, setLang } = useI18n();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [showPw, setShowPw] = useState(false);
-  const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
+  const [gender, setGender] = useState('');
+  const [phone, setPhone] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [isGenderOpen, setIsGenderOpen] = useState(false);
+  const [currentPickerMonth, setCurrentPickerMonth] = useState(() => new Date());
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAuth = () => {
+  const genderOptions = [
+    { value: 'Male', label: t('auth.genderOptionMale') },
+    { value: 'Female', label: t('auth.genderOptionFemale') },
+    { value: 'Other', label: t('auth.genderOptionOther') },
+  ];
+
+  const dateOfBirthDisplay = dateOfBirth
+    ? new Date(dateOfBirth).toLocaleDateString(lang === 'vi' ? 'vi' : 'en-US', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      })
+    : t('auth.dateOfBirth');
+
+  const handleAuth = async () => {
     if (mode === 'register') {
-      if (!name || !email || !pw || !confirmPw) {
+      if (!username || !displayName || !email || !pw || !confirmPw || !gender || !phone || !dateOfBirth) {
         Toast.show({ type: 'error', text1: lang === 'vi' ? 'Vui lòng điền đầy đủ thông tin' : 'Please fill in all fields' });
         return;
       }
@@ -40,7 +64,35 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
         return;
       }
     }
-    onContinue();
+
+    try {
+      setIsSubmitting(true);
+      if (mode === 'register') {
+        const auth = await registerUser({
+          username: username.trim(),
+          email: email.trim(),
+          password: pw,
+          displayName: displayName.trim(),
+          gender: gender.trim(),
+          phoneNumber: phone.trim(),
+          dateOfBirth: dateOfBirth.trim(),
+        });
+        await saveAuthSession(auth);
+        Toast.show({ type: 'success', text1: lang === 'vi' ? 'Đăng ký thành công' : 'Registration successful' });
+        onContinue();
+        return;
+      }
+
+      const auth = await loginUser({ email: email.trim(), password: pw });
+      await saveAuthSession(auth);
+      Toast.show({ type: 'success', text1: lang === 'vi' ? 'Đăng nhập thành công' : 'Login successful' });
+      onContinue();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected error';
+      Toast.show({ type: 'error', text1: message });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -109,17 +161,30 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
           {/* Inputs */}
           <View style={styles.inputs}>
             {mode === 'register' && (
-              <View style={styles.inputRow}>
-                <Ionicons name="person-outline" size={16} color={Colors.primary} />
-                <TextInput
-                  value={name}
-                  onChangeText={setName}
-                  placeholder={t('auth.name')}
-                  placeholderTextColor={Colors.textMuted}
-                  style={styles.input}
-                  autoCapitalize="words"
-                />
-              </View>
+              <>
+                <View style={styles.inputRow}>
+                  <Ionicons name="at-outline" size={16} color={Colors.primary} />
+                  <TextInput
+                    value={username}
+                    onChangeText={setUsername}
+                    placeholder={t('auth.username')}
+                    placeholderTextColor={Colors.textMuted}
+                    style={styles.input}
+                    autoCapitalize="none"
+                  />
+                </View>
+                <View style={styles.inputRow}>
+                  <Ionicons name="person-outline" size={16} color={Colors.primary} />
+                  <TextInput
+                    value={displayName}
+                    onChangeText={setDisplayName}
+                    placeholder={t('auth.displayName')}
+                    placeholderTextColor={Colors.textMuted}
+                    style={styles.input}
+                    autoCapitalize="words"
+                  />
+                </View>
+              </>
             )}
 
             <View style={styles.inputRow}>
@@ -151,24 +216,149 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
             </View>
 
             {mode === 'register' && (
-              <View style={styles.inputRow}>
-                <View style={styles.pwDot} />
-                <TextInput
-                  value={confirmPw}
-                  onChangeText={setConfirmPw}
-                  placeholder={t('auth.confirmPassword')}
-                  placeholderTextColor={Colors.textMuted}
-                  secureTextEntry={!showPw}
-                  style={styles.input}
-                />
-              </View>
+              <>
+                <View style={styles.inputRow}>
+                  <View style={styles.pwDot} />
+                  <TextInput
+                    value={confirmPw}
+                    onChangeText={setConfirmPw}
+                    placeholder={t('auth.confirmPassword')}
+                    placeholderTextColor={Colors.textMuted}
+                    secureTextEntry={!showPw}
+                    style={styles.input}
+                  />
+                </View>
+                <View style={styles.genderWrapper}>
+                  <TouchableOpacity
+                    onPress={() => setIsGenderOpen(v => !v)}
+                    style={styles.inputRow}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="male-female-outline" size={16} color={Colors.primary} />
+                    <Text style={[styles.input, !gender && styles.placeholderText]}>
+                      {gender
+                        ? genderOptions.find(option => option.value === gender)?.label
+                        : (lang === 'vi' ? 'Giới tính' : 'Gender')}
+                    </Text>
+                    <Ionicons
+                      name={isGenderOpen ? 'chevron-up-outline' : 'chevron-down-outline'}
+                      size={16}
+                      color={Colors.primary}
+                    />
+                  </TouchableOpacity>
+                  {isGenderOpen && (
+                    <View style={styles.genderDropdown}>
+                      {genderOptions.map(option => (
+                        <TouchableOpacity
+                          key={option.value}
+                          style={[
+                            styles.genderDropdownOption,
+                            gender === option.value && styles.genderDropdownOptionActive,
+                          ]}
+                          activeOpacity={0.8}
+                          onPress={() => {
+                            setGender(option.value);
+                            setIsGenderOpen(false);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.genderDropdownOptionText,
+                              gender === option.value && styles.genderDropdownOptionTextActive,
+                            ]}
+                          >
+                            {option.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+                <View style={styles.inputRow}>
+                  <Ionicons name="call-outline" size={16} color={Colors.primary} />
+                  <TextInput
+                    value={phone}
+                    onChangeText={setPhone}
+                    placeholder={t('auth.phoneNumber')}
+                    placeholderTextColor={Colors.textMuted}
+                    style={styles.input}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+                <TouchableOpacity onPress={() => setIsDatePickerOpen(true)} style={styles.inputRow} activeOpacity={0.85}>
+                  <Ionicons name="calendar-outline" size={16} color={Colors.primary} />
+                  <Text style={[styles.input, !dateOfBirth && styles.placeholderText]}>{dateOfBirthDisplay}</Text>
+                </TouchableOpacity>
+              </>
             )}
           </View>
 
+          {/* Date picker */}
+          <Modal transparent visible={isDatePickerOpen} animationType="fade" statusBarTranslucent>
+            <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setIsDatePickerOpen(false)}>
+              <View style={styles.calendarCard}>
+                <View style={styles.yearHeader}>
+                  <TouchableOpacity onPress={() => setCurrentPickerMonth(prev => new Date(prev.getFullYear() - 1, prev.getMonth(), 1))} style={styles.yearButton}>
+                    <Ionicons name="chevron-back-outline" size={18} color={Colors.textDark} />
+                  </TouchableOpacity>
+                  <Text style={styles.calendarYear}>{currentPickerMonth.getFullYear()}</Text>
+                  <TouchableOpacity onPress={() => setCurrentPickerMonth(prev => new Date(prev.getFullYear() + 1, prev.getMonth(), 1))} style={styles.yearButton}>
+                    <Ionicons name="chevron-forward-outline" size={18} color={Colors.textDark} />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.calendarHeader}>
+                  <TouchableOpacity onPress={() => setCurrentPickerMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}>
+                    <Ionicons name="chevron-back-outline" size={22} color={Colors.textDark} />
+                  </TouchableOpacity>
+                  <Text style={styles.calendarTitle}>{currentPickerMonth.toLocaleString(lang === 'vi' ? 'vi' : 'en-US', { month: 'long' })}</Text>
+                  <TouchableOpacity onPress={() => setCurrentPickerMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}>
+                    <Ionicons name="chevron-forward-outline" size={22} color={Colors.textDark} />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.weekHeader}>
+                  {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(day => (
+                    <Text key={day} style={styles.weekDay}>{day}</Text>
+                  ))}
+                </View>
+                <View style={styles.daysGrid}>
+                  {(() => {
+                    const firstDay = new Date(currentPickerMonth.getFullYear(), currentPickerMonth.getMonth(), 1).getDay();
+                    const totalDays = new Date(currentPickerMonth.getFullYear(), currentPickerMonth.getMonth() + 1, 0).getDate();
+                    const cells = Array.from({ length: firstDay + totalDays }, (_, index) => {
+                      if (index < firstDay) return null;
+                      return index - firstDay + 1;
+                    });
+                    return cells.map((day, idx) => (
+                      <TouchableOpacity
+                        key={`${currentPickerMonth.getMonth()}-${idx}`}
+                        style={[styles.dayCell, day ? styles.dayCellEnabled : undefined]}
+                        activeOpacity={day ? 0.7 : 1}
+                        disabled={!day}
+                        onPress={() => {
+                          if (!day) return;
+                          const selected = new Date(currentPickerMonth.getFullYear(), currentPickerMonth.getMonth(), day);
+                          const iso = selected.toISOString().slice(0, 10);
+                          setDateOfBirth(iso);
+                          setIsDatePickerOpen(false);
+                        }}
+                      >
+                        <Text style={[styles.dayText, !day && styles.dayTextDisabled]}>{day || ''}</Text>
+                      </TouchableOpacity>
+                    ));
+                  })()}
+                </View>
+              </View>
+            </TouchableOpacity>
+          </Modal>
+
           {/* Main CTA */}
-          <TouchableOpacity onPress={handleAuth} activeOpacity={0.88} style={styles.cta}>
+          <TouchableOpacity onPress={handleAuth} activeOpacity={0.88} style={styles.cta} disabled={isSubmitting}>
             <LinearGradient colors={Gradients.primary} style={styles.ctaGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-              <Text style={styles.ctaText}>{mode === 'login' ? t('auth.login') : t('auth.signup')}</Text>
+              {isSubmitting ? (
+                <ActivityIndicator color={Colors.white} />
+              ) : (
+                <Text style={styles.ctaText}>{mode === 'login' ? t('auth.login') : t('auth.signup')}</Text>
+              )}
             </LinearGradient>
           </TouchableOpacity>
 
@@ -351,6 +541,125 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: Colors.textDark,
+  },
+  genderWrapper: {
+    position: 'relative',
+    zIndex: 10,
+  },
+  genderDropdown: {
+    marginTop: 6,
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.primarySoft,
+    overflow: 'hidden',
+    ...Shadows.soft,
+  },
+  genderDropdownOption: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderColor: '#F1E8FF',
+  },
+  genderDropdownOptionActive: {
+    backgroundColor: 'rgba(124, 91, 255, 0.08)',
+  },
+  genderDropdownOptionText: {
+    fontSize: 13,
+    color: Colors.textDark,
+  },
+  genderDropdownOptionTextActive: {
+    color: Colors.primary,
+    fontWeight: '700',
+  },
+  placeholderText: {
+    color: Colors.textMuted,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 24,
+    padding: 20,
+  },
+  modalItem: {
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderColor: '#F1E8FF',
+  },
+  modalItemText: {
+    fontSize: 16,
+    color: Colors.textDark,
+  },
+  calendarCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 24,
+    padding: 18,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  calendarTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textDark,
+  },
+  yearHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  yearButton: {
+    padding: 8,
+    borderRadius: 14,
+    backgroundColor: 'rgba(124,91,255,0.08)',
+  },
+  calendarYear: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textDark,
+  },
+  weekHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  weekDay: {
+    width: 30,
+    textAlign: 'center',
+    color: Colors.textMid,
+    fontSize: 12,
+  },
+  daysGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'flex-start',
+  },
+  dayCell: {
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  dayCellEnabled: {
+    backgroundColor: 'rgba(124, 91, 255, 0.08)',
+  },
+  dayText: {
+    color: Colors.textDark,
+    fontSize: 13,
+  },
+  dayTextDisabled: {
+    color: Colors.textMuted,
   },
   pwDot: {
     width: 16,

@@ -4,10 +4,12 @@
  * Includes interactive mood status selector, verified user badge, Unsplash banner and avatar,
  * web layout constraints, and sleek settings groups.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Dimensions,
+  Modal, TextInput, ActivityIndicator, KeyboardAvoidingView,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Gradients, Shadows } from '../constants/colors';
@@ -15,6 +17,7 @@ import { useI18n } from '../i18n';
 import type { Lang } from '../i18n';
 import Toggle from '../components/Toggle';
 import * as Haptics from 'expo-haptics';
+import { changeUserPassword, getUserProfile, uploadUserAvatar, uploadUserCover, updateUserProfile, type UserProfile } from '../services/userApi';
 import Toast from 'react-native-toast-message';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -42,12 +45,184 @@ export default function ProfileScreen({
   const { t, lang, setLang } = useI18n();
   const insets = useSafeAreaInsets();
   const [currentMood, setCurrentMood] = useState('🍵');
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [profileError, setProfileError] = useState('');
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editDisplayName, setEditDisplayName] = useState('');
+  const [editGender, setEditGender] = useState('');
+  const [editDateOfBirth, setEditDateOfBirth] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [isGenderOpen, setIsGenderOpen] = useState(false);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [currentPickerMonth, setCurrentPickerMonth] = useState(() => new Date());
+  const [isSaving, setIsSaving] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [isPasswordOpen, setIsPasswordOpen] = useState(false);
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+
+  const genderOptions = [
+    { value: 'Male', label: t('auth.genderOptionMale') },
+    { value: 'Female', label: t('auth.genderOptionFemale') },
+    { value: 'Other', label: t('auth.genderOptionOther') },
+  ];
+
+  const editDateOfBirthDisplay = editDateOfBirth
+    ? new Date(editDateOfBirth).toLocaleDateString(lang === 'vi' ? 'vi' : 'en-US', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      })
+    : t('auth.dateOfBirth');
 
   const stats = [
-    { n: '128', l: t('profile.moments'), icon: 'trail-sign-outline' },
-    { n: '12',  l: t('profile.friends'), icon: 'people-outline' },
-    { n: '38',  l: t('profile.places'), icon: 'location-outline' },
+    { n: profile ? String(profile.postCount) : '0', l: t('profile.moments'), icon: 'trail-sign-outline' },
+    { n: profile ? String(profile.friendCount) : '0', l: t('profile.friends'), icon: 'people-outline' },
+    { n: profile ? String(profile.placeCount) : '0', l: t('profile.places'), icon: 'location-outline' },
   ];
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadProfile() {
+      try {
+        const data = await getUserProfile();
+        if (mounted) setProfile(data);
+      } catch (error) {
+        if (!mounted) return;
+        setProfileError(error instanceof Error ? error.message : 'Unable to load profile');
+      } finally {
+        if (mounted) setLoadingProfile(false);
+      }
+    }
+
+    loadProfile();
+    return () => { mounted = false; };
+  }, []);
+
+  const openEditModal = () => {
+    if (!profile) return;
+    setEditDisplayName(profile.displayName ?? '');
+    setEditGender(profile.gender ?? '');
+    setEditDateOfBirth(profile.dateOfBirth ?? '');
+    setEditBio(profile.bio ?? '');
+    setIsGenderOpen(false);
+    setIsDatePickerOpen(false);
+    setCurrentPickerMonth(profile.dateOfBirth ? new Date(profile.dateOfBirth) : new Date());
+    setIsEditOpen(true);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!editDisplayName.trim() || !editGender || !editDateOfBirth.trim()) {
+      Toast.show({ type: 'error', text1: t('profile.fillAllFields') });
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      const updated = await updateUserProfile({
+        displayName: editDisplayName.trim(),
+        gender: editGender,
+        dateOfBirth: editDateOfBirth.trim(),
+        bio: editBio.trim(),
+      });
+      setProfile(updated);
+      setIsEditOpen(false);
+      Toast.show({ type: 'success', text1: t('profile.profileSaved') });
+    } catch (error) {
+      Toast.show({
+        type: 'error',
+        text1: error instanceof Error ? error.message : t('profile.saveFailed'),
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const requestImagePermission = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Toast.show({ type: 'error', text1: t('profile.imagePermissionRequired') });
+      return false;
+    }
+    return true;
+  };
+
+  const pickImage = async (target: 'avatar' | 'cover') => {
+    const hasPermission = await requestImagePermission();
+    if (!hasPermission) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+      allowsEditing: true,
+      aspect: target === 'avatar' ? [1, 1] : [16, 9],
+    });
+
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    const uri = asset.uri;
+    const fileName = uri.split('/').pop() ?? `${target}.jpg`;
+    const fileTypeMatch = /\.(\w+)$/.exec(fileName);
+    const fileType = fileTypeMatch ? `image/${fileTypeMatch[1]}` : 'image/jpeg';
+    const formData = new FormData();
+    const file: any = { uri, name: fileName, type: fileType };
+    formData.append('file', file);
+
+    try {
+      if (target === 'avatar') setUploadingAvatar(true);
+      else setUploadingCover(true);
+
+      if (target === 'avatar') {
+        await uploadUserAvatar(formData);
+      } else {
+        await uploadUserCover(formData);
+      }
+
+      const updatedProfile = await getUserProfile();
+      setProfile(updatedProfile);
+      Toast.show({ type: 'success', text1: t('profile.uploadSuccess') });
+    } catch (error) {
+      Toast.show({ type: 'error', text1: error instanceof Error ? error.message : t('profile.uploadFailed') });
+    } finally {
+      if (target === 'avatar') setUploadingAvatar(false);
+      else setUploadingCover(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!oldPassword || !newPassword || !confirmPassword) {
+      Toast.show({ type: 'error', text1: t('profile.passwordFill') });
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      Toast.show({ type: 'error', text1: t('profile.passwordMismatch') });
+      return;
+    }
+
+    try {
+      setIsChangingPassword(true);
+      await changeUserPassword({
+        oldPassword,
+        newPassword,
+        confirmPassword,
+      });
+      setIsPasswordOpen(false);
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      Toast.show({ type: 'success', text1: t('profile.passwordChanged') });
+    } catch (error) {
+      Toast.show({ type: 'error', text1: error instanceof Error ? error.message : t('profile.passwordFailed') });
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
 
   return (
     <ScrollView
@@ -58,7 +233,7 @@ export default function ProfileScreen({
       {/* Cover / Hero image */}
       <View style={styles.heroWrap}>
         <Image
-          source={{ uri: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=600&fit=crop' }} // Colorful pastel linear color scheme
+          source={{ uri: profile?.coverUrl || 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=600&fit=crop' }}
           style={styles.heroBg}
         />
         <TouchableOpacity
@@ -74,6 +249,11 @@ export default function ProfileScreen({
 
       {/* Profile Card Overlay */}
       <View style={styles.profileCard}>
+        {profileError ? (
+          <View style={styles.errorRow}>
+            <Text style={styles.errorText}>{profileError}</Text>
+          </View>
+        ) : null}
         {/* Avatar and main info */}
         <View style={styles.avatarRow}>
           <TouchableOpacity
@@ -82,7 +262,7 @@ export default function ProfileScreen({
             activeOpacity={0.9}
           >
             <Image
-              source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop' }} // matches user face in story tray
+              source={{ uri: profile?.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop' }}
               style={styles.avatarImg}
             />
             <View style={styles.moodBadge}>
@@ -91,19 +271,60 @@ export default function ProfileScreen({
           </TouchableOpacity>
           <View style={styles.avatarInfo}>
             <View style={styles.nameRow}>
-              <Text style={styles.handle}>Linn Nguyen</Text>
-              <Ionicons name="checkmark-circle" size={16} color="#3B82F6" />
+              <Text style={styles.handle}>{profile?.displayName ?? t('profile.loading')}</Text>
+              {profile && <Ionicons name="checkmark-circle" size={16} color="#3B82F6" />}
             </View>
-            <Text style={styles.username}>@linn_nguyen99</Text>
-            <Text style={styles.joined}>{t('profile.joined')}</Text>
+            <Text style={styles.username}>@{profile?.username ?? '...'}</Text>
+            {profile && (
+              <View style={styles.metaRow}>
+                <Text style={styles.metaText}>{profile.gender}</Text>
+                <Text style={styles.metaDot}>•</Text>
+                <Text style={styles.metaText}>{new Date(profile.dateOfBirth).toLocaleDateString(lang === 'vi' ? 'vi' : 'en-US', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  year: 'numeric',
+                })}</Text>
+              </View>
+            )}
+            {profile?.bio ? <Text style={styles.bio}>{profile.bio}</Text> : null}
+            {profile && (
+              <Text style={styles.joined}>{t('profile.joinedPrefix')} {new Date(profile.createdAt).toLocaleDateString(lang === 'vi' ? 'vi' : 'en-US', {
+                month: 'long',
+                year: 'numeric',
+              })}</Text>
+            )}
           </View>
           <TouchableOpacity
-            onPress={() => Toast.show({ type: 'info', text1: t('profile.editProfile') })}
-            style={styles.editBtn}
-          >
-            <Text style={styles.editText}>{t('common.edit')}</Text>
-          </TouchableOpacity>
-        </View>
+              onPress={openEditModal}
+              style={styles.editBtn}
+            >
+              <Text style={styles.editText}>{t('common.edit')}</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.uploadActions}>
+            <TouchableOpacity
+              onPress={() => pickImage('avatar')}
+              style={styles.uploadButton}
+              activeOpacity={0.85}
+            >
+              {uploadingAvatar ? (
+                <ActivityIndicator color={Colors.white} size="small" />
+              ) : (
+                <Text style={styles.uploadButtonText}>{t('profile.uploadAvatar')}</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => pickImage('cover')}
+              style={[styles.uploadButton, styles.uploadCoverButton]}
+              activeOpacity={0.85}
+            >
+              {uploadingCover ? (
+                <ActivityIndicator color={Colors.white} size="small" />
+              ) : (
+                <Text style={styles.uploadButtonText}>{t('profile.uploadCover')}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
 
         {/* GenZ Mood Selector Widget */}
         <View style={styles.moodWidget}>
@@ -147,6 +368,280 @@ export default function ProfileScreen({
         </View>
       </View>
 
+      <Modal
+        visible={isEditOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsEditOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalWrapper}
+          >
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <View>
+                  <Text style={styles.modalTitle}>{t('profile.editProfile')}</Text>
+                  <Text style={styles.modalSubtitle}>{t('profile.editProfileDesc')}</Text>
+                </View>
+                <TouchableOpacity onPress={() => setIsEditOpen(false)} style={styles.closeButton}>
+                  <Ionicons name="close" size={20} color={Colors.textDark} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={styles.modalBody} showsVerticalScrollIndicator={false}>
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>{t('auth.displayName')}</Text>
+                  <TextInput
+                    value={editDisplayName}
+                    onChangeText={setEditDisplayName}
+                    placeholder={t('auth.displayName')}
+                    placeholderTextColor={Colors.textMuted}
+                    style={styles.fieldInput}
+                    autoCapitalize="words"
+                  />
+                </View>
+
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>{t('auth.gender')}</Text>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setIsGenderOpen(v => !v)}
+                    style={[styles.fieldInput, styles.pickerInput]}
+                  >
+                    <Text style={editGender ? styles.fieldText : styles.placeholderText}>
+                      {editGender
+                        ? genderOptions.find(option => option.value === editGender)?.label
+                        : t('auth.gender')}
+                    </Text>
+                    <Ionicons
+                      name={isGenderOpen ? 'chevron-up-outline' : 'chevron-down-outline'}
+                      size={18}
+                      color={Colors.textMid}
+                    />
+                  </TouchableOpacity>
+                  {isGenderOpen && (
+                    <View style={styles.pickerList}>
+                      {genderOptions.map(option => (
+                        <TouchableOpacity
+                          key={option.value}
+                          onPress={() => {
+                            setEditGender(option.value);
+                            setIsGenderOpen(false);
+                          }}
+                          style={[
+                            styles.pickerOption,
+                            editGender === option.value && styles.pickerOptionActive,
+                          ]}
+                        >
+                          <Text style={[
+                            styles.pickerOptionText,
+                            editGender === option.value && styles.pickerOptionTextActive,
+                          ]}
+                          >
+                            {option.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>{t('auth.dateOfBirth')}</Text>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setIsDatePickerOpen(true)}
+                    style={[styles.fieldInput, styles.pickerInput]}
+                  >
+                    <Text style={editDateOfBirth ? styles.fieldText : styles.placeholderText}>
+                      {editDateOfBirthDisplay}
+                    </Text>
+                    <Ionicons name="calendar-outline" size={18} color={Colors.textMid} />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>Bio</Text>
+                  <TextInput
+                    value={editBio}
+                    onChangeText={setEditBio}
+                    placeholder={t('profile.bioPlaceholder')}
+                    placeholderTextColor={Colors.textMuted}
+                    style={[styles.fieldInput, styles.textarea]}
+                    multiline
+                    numberOfLines={4}
+                  />
+                </View>
+
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    onPress={() => setIsEditOpen(false)}
+                    style={[styles.modalButton, styles.cancelBtn]}
+                    disabled={isSaving}
+                  >
+                    <Text style={styles.cancelText}>{t('common.cancel')}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleSaveProfile}
+                    style={[styles.modalButton, styles.saveBtn]}
+                    activeOpacity={0.85}
+                    disabled={isSaving}
+                  >
+                    {isSaving ? (
+                      <ActivityIndicator color={Colors.white} size="small" />
+                    ) : (
+                      <Text style={styles.saveText}>{t('profile.saveChanges')}</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      <Modal transparent visible={isDatePickerOpen} animationType="fade" statusBarTranslucent onRequestClose={() => setIsDatePickerOpen(false)}>
+        <TouchableOpacity style={styles.calendarOverlay} activeOpacity={1} onPress={() => setIsDatePickerOpen(false)}>
+          <View style={styles.calendarCard}>
+            <View style={styles.yearHeader}>
+              <TouchableOpacity onPress={() => setCurrentPickerMonth(prev => new Date(prev.getFullYear() - 1, prev.getMonth(), 1))} style={styles.yearButton}>
+                <Ionicons name="chevron-back-outline" size={18} color={Colors.textDark} />
+              </TouchableOpacity>
+              <Text style={styles.calendarYear}>{currentPickerMonth.getFullYear()}</Text>
+              <TouchableOpacity onPress={() => setCurrentPickerMonth(prev => new Date(prev.getFullYear() + 1, prev.getMonth(), 1))} style={styles.yearButton}>
+                <Ionicons name="chevron-forward-outline" size={18} color={Colors.textDark} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.calendarHeader}>
+              <TouchableOpacity onPress={() => setCurrentPickerMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}>
+                <Ionicons name="chevron-back-outline" size={22} color={Colors.textDark} />
+              </TouchableOpacity>
+              <Text style={styles.calendarTitle}>{currentPickerMonth.toLocaleString(lang === 'vi' ? 'vi' : 'en-US', { month: 'long' })}</Text>
+              <TouchableOpacity onPress={() => setCurrentPickerMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}>
+                <Ionicons name="chevron-forward-outline" size={22} color={Colors.textDark} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.weekHeader}>
+              {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(day => (
+                <Text key={day} style={styles.weekDay}>{day}</Text>
+              ))}
+            </View>
+            <View style={styles.daysGrid}>
+              {(() => {
+                const firstDay = new Date(currentPickerMonth.getFullYear(), currentPickerMonth.getMonth(), 1).getDay();
+                const totalDays = new Date(currentPickerMonth.getFullYear(), currentPickerMonth.getMonth() + 1, 0).getDate();
+                const cells = Array.from({ length: firstDay + totalDays }, (_, index) => {
+                  if (index < firstDay) return null;
+                  return index - firstDay + 1;
+                });
+                return cells.map((day, idx) => (
+                  <TouchableOpacity
+                    key={`${currentPickerMonth.getMonth()}-${idx}`}
+                    style={[styles.dayCell, day ? styles.dayCellEnabled : undefined]}
+                    activeOpacity={day ? 0.7 : 1}
+                    disabled={!day}
+                    onPress={() => {
+                      if (!day) return;
+                      const selected = new Date(currentPickerMonth.getFullYear(), currentPickerMonth.getMonth(), day);
+                      const iso = selected.toISOString().slice(0, 10);
+                      setEditDateOfBirth(iso);
+                      setIsDatePickerOpen(false);
+                    }}
+                  >
+                    <Text style={[styles.dayText, !day && styles.dayTextDisabled]}>{day || ''}</Text>
+                  </TouchableOpacity>
+                ));
+              })()}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={isPasswordOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsPasswordOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalWrapper}
+          >
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <View>
+                  <Text style={styles.modalTitle}>{t('profile.changePassword')}</Text>
+                  <Text style={styles.modalSubtitle}>{t('profile.changePasswordDesc')}</Text>
+                </View>
+                <TouchableOpacity onPress={() => setIsPasswordOpen(false)} style={styles.closeButton}>
+                  <Ionicons name="close" size={20} color={Colors.textDark} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={styles.modalBody} showsVerticalScrollIndicator={false}>
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>{t('profile.oldPassword')}</Text>
+                  <TextInput
+                    value={oldPassword}
+                    onChangeText={setOldPassword}
+                    placeholder={t('profile.oldPasswordPlaceholder')}
+                    placeholderTextColor={Colors.textMuted}
+                    secureTextEntry
+                    style={styles.fieldInput}
+                  />
+                </View>
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>{t('profile.newPassword')}</Text>
+                  <TextInput
+                    value={newPassword}
+                    onChangeText={setNewPassword}
+                    placeholder={t('profile.newPasswordPlaceholder')}
+                    placeholderTextColor={Colors.textMuted}
+                    secureTextEntry
+                    style={styles.fieldInput}
+                  />
+                </View>
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>{t('auth.confirmPassword')}</Text>
+                  <TextInput
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    placeholder={t('auth.confirmPassword')}
+                    placeholderTextColor={Colors.textMuted}
+                    secureTextEntry
+                    style={styles.fieldInput}
+                  />
+                </View>
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    onPress={() => setIsPasswordOpen(false)}
+                    style={[styles.modalButton, styles.cancelBtn]}
+                    disabled={isChangingPassword}
+                  >
+                    <Text style={styles.cancelText}>{t('common.cancel')}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleChangePassword}
+                    style={[styles.modalButton, styles.saveBtn]}
+                    activeOpacity={0.85}
+                    disabled={isChangingPassword}
+                  >
+                    {isChangingPassword ? (
+                      <ActivityIndicator color={Colors.white} size="small" />
+                    ) : (
+                      <Text style={styles.saveText}>{t('profile.changePassword')}</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
       {/* Privacy group */}
       <View style={styles.group}>
         <SettingRow
@@ -179,6 +674,27 @@ export default function ProfileScreen({
               disabled={!locationGranted}
             />
           }
+        />
+      </View>
+
+      <View style={styles.group}>
+        <SettingRow
+          icon="image"
+          label={t('profile.uploadAvatar')}
+          right={uploadingAvatar ? <ActivityIndicator size="small" color={Colors.primary} /> : <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />}
+          onPress={() => pickImage('avatar')}
+        />
+        <SettingRow
+          icon="images"
+          label={t('profile.uploadCover')}
+          right={uploadingCover ? <ActivityIndicator size="small" color={Colors.primary} /> : <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />}
+          onPress={() => pickImage('cover')}
+        />
+        <SettingRow
+          icon="lock-closed"
+          label={t('profile.changePassword')}
+          right={<Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />}
+          onPress={() => setIsPasswordOpen(true)}
         />
       </View>
 
@@ -399,6 +915,228 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 4,
   },
+  bio: {
+    marginTop: 10,
+    fontSize: 12,
+    color: Colors.textMid,
+    lineHeight: 18,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  modalWrapper: {
+    width: '100%',
+    justifyContent: 'flex-end',
+    ...Platform.select({
+      web: {
+        maxWidth: 500,
+      },
+      default: {},
+    }),
+  },
+  modalCard: {
+    maxHeight: '88%',
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: 18,
+    paddingHorizontal: 20,
+    paddingBottom: 26,
+    ...Shadows.float,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 16,
+    gap: 12,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: Colors.textDark,
+  },
+  modalSubtitle: {
+    marginTop: 4,
+    fontSize: 12,
+    color: Colors.textMuted,
+    lineHeight: 18,
+  },
+  closeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F5F2FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalBody: {
+    paddingBottom: 20,
+  },
+  fieldBlock: {
+    marginBottom: 16,
+  },
+  fieldLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textDark,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  fieldInput: {
+    backgroundColor: '#F8F7FF',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    color: Colors.textDark,
+    fontSize: 13,
+  },
+  fieldText: {
+    color: Colors.textDark,
+  },
+  placeholderText: {
+    color: Colors.textMuted,
+  },
+  pickerInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  pickerList: {
+    marginTop: 10,
+    borderRadius: 16,
+    backgroundColor: '#F7F5FF',
+    borderWidth: 1,
+    borderColor: '#EFE9FF',
+    overflow: 'hidden',
+  },
+  pickerOption: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  pickerOptionActive: {
+    backgroundColor: '#EEE7FF',
+  },
+  pickerOptionText: {
+    fontSize: 13,
+    color: Colors.textDark,
+  },
+  pickerOptionTextActive: {
+    color: Colors.primary,
+    fontWeight: '700',
+  },
+  textarea: {
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  calendarOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  calendarCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: Colors.white,
+    borderRadius: 24,
+    padding: 18,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  calendarTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textDark,
+  },
+  yearHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  yearButton: {
+    padding: 8,
+    borderRadius: 14,
+    backgroundColor: 'rgba(124,91,255,0.08)',
+  },
+  calendarYear: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textDark,
+  },
+  weekHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  weekDay: {
+    width: 30,
+    textAlign: 'center',
+    color: Colors.textMid,
+    fontSize: 12,
+  },
+  daysGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'flex-start',
+  },
+  dayCell: {
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  dayCellEnabled: {
+    backgroundColor: 'rgba(124, 91, 255, 0.08)',
+  },
+  dayText: {
+    color: Colors.textDark,
+    fontSize: 13,
+  },
+  dayTextDisabled: {
+    color: Colors.textMuted,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 4,
+  },
+  modalButton: {
+    flex: 1,
+    borderRadius: 18,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelBtn: {
+    backgroundColor: '#F5F2FF',
+  },
+  cancelText: {
+    fontSize: 13,
+    color: Colors.primary,
+    fontWeight: '800',
+  },
+  saveBtn: {
+    backgroundColor: Colors.primary,
+  },
+  saveText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Colors.white,
+  },
   editBtn: {
     backgroundColor: '#F5F2FF',
     paddingHorizontal: 12,
@@ -524,6 +1262,14 @@ const styles = StyleSheet.create({
   rowInfo: {
     flex: 1,
   },
+  loadingRow: {
+    alignItems: 'center',
+    paddingVertical: 14,
+  },
+  loadingText: {
+    color: Colors.textMid,
+    fontSize: 12,
+  },
   rowLabel: {
     fontSize: 13,
     fontWeight: '700',
@@ -561,10 +1307,59 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 11,
   },
+  errorRow: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFEFF3',
+    borderRadius: 16,
+    marginBottom: 12,
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#D80035',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+  },
+  metaText: {
+    fontSize: 10,
+    color: Colors.textMuted,
+  },
+  metaDot: {
+    fontSize: 10,
+    color: Colors.textMuted,
+  },
   tryBadge: {
     borderRadius: 14,
     overflow: 'hidden',
     ...Shadows.glow,
+  },
+  uploadActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+    flexWrap: 'wrap',
+  },
+  uploadButton: {
+    flex: 1,
+    backgroundColor: Colors.primary,
+    borderRadius: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadCoverButton: {
+    backgroundColor: '#7B5BFF',
+  },
+  uploadButtonText: {
+    color: Colors.white,
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   tryBadgeGrad: {
     paddingHorizontal: 10,

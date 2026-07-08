@@ -53,6 +53,20 @@ export default function App() {
 
 function AppInner() {
   const { t } = useI18n();
+  const [checkingSession, setCheckingSession] = useState(true);
+  useEffect(() => {
+    (async () => {
+      const { getStoredAuthSession } = await import('./src/services/authApi');
+      try {
+        const session = await getStoredAuthSession();
+        if (session) setScreen('app');
+      } catch {
+        // ignore
+      } finally {
+        setCheckingSession(false);
+      }
+    })();
+  }, []);
   const [screen, setScreen] = useState<Screen>('auth');
   const [tab, setTab] = useState<Tab>('map');
   const [locationGranted, setLocationGranted] = useState<boolean | null>(null);
