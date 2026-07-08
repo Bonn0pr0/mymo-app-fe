@@ -26,6 +26,20 @@ type Screen = 'auth' | 'app';
 type Tab = 'map' | 'friends' | 'notifications' | 'profile';
 
 export default function App() {
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      const style = document.createElement('style');
+      style.textContent = `
+        body {
+          background-color: #F3F1F8 !important;
+          margin: 0;
+          padding: 0;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }, []);
+
   return (
     <SafeAreaProvider>
       <I18nProvider>
@@ -242,6 +256,19 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: Colors.primaryTint,
+    ...Platform.select({
+      web: {
+        maxWidth: 500,
+        width: '100%',
+        marginHorizontal: 'auto',
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderColor: '#EBE8F5',
+        boxShadow: '0 8px 30px rgba(124, 91, 255, 0.06)',
+        position: 'relative',
+      },
+      default: {},
+    }),
   },
   content: {
     flex: 1,

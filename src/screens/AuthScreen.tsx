@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, KeyboardAvoidingView, Platform,
+  ScrollView, KeyboardAvoidingView, Platform, Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,13 +19,26 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
   const { t, lang, setLang } = useI18n();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [showPw, setShowPw] = useState(false);
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
 
   const handleAuth = () => {
-    if (!email || !pw) {
-      Toast.show({ type: 'error', text1: 'Vui lòng nhập email và mật khẩu' });
-      return;
+    if (mode === 'register') {
+      if (!name || !email || !pw || !confirmPw) {
+        Toast.show({ type: 'error', text1: lang === 'vi' ? 'Vui lòng điền đầy đủ thông tin' : 'Please fill in all fields' });
+        return;
+      }
+      if (pw !== confirmPw) {
+        Toast.show({ type: 'error', text1: lang === 'vi' ? 'Mật khẩu nhập lại không khớp' : 'Passwords do not match' });
+        return;
+      }
+    } else {
+      if (!email || !pw) {
+        Toast.show({ type: 'error', text1: lang === 'vi' ? 'Vui lòng nhập email và mật khẩu' : 'Please enter email and password' });
+        return;
+      }
     }
     onContinue();
   };
@@ -50,12 +63,11 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
 
           {/* Top bar */}
           <View style={styles.topBar}>
-            <View style={styles.logo}>
-              <LinearGradient colors={Gradients.primary} style={styles.logoGrad}>
-                <Ionicons name="sparkles" size={20} color={Colors.white} />
-              </LinearGradient>
-              <Text style={styles.logoText}>MYMO</Text>
-            </View>
+            <Image
+              source={require('../../assets/logo.png')}
+              style={styles.projectLogo}
+              resizeMode="contain"
+            />
             <TouchableOpacity
               onPress={() => setLang(lang === 'vi' ? 'en' : 'vi')}
               style={styles.langBtn}
@@ -96,6 +108,20 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
 
           {/* Inputs */}
           <View style={styles.inputs}>
+            {mode === 'register' && (
+              <View style={styles.inputRow}>
+                <Ionicons name="person-outline" size={16} color={Colors.primary} />
+                <TextInput
+                  value={name}
+                  onChangeText={setName}
+                  placeholder={t('auth.name')}
+                  placeholderTextColor={Colors.textMuted}
+                  style={styles.input}
+                  autoCapitalize="words"
+                />
+              </View>
+            )}
+
             <View style={styles.inputRow}>
               <Ionicons name="mail-outline" size={16} color={Colors.primary} />
               <TextInput
@@ -108,6 +134,7 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
                 autoCapitalize="none"
               />
             </View>
+
             <View style={styles.inputRow}>
               <View style={styles.pwDot} />
               <TextInput
@@ -122,6 +149,20 @@ export default function AuthScreen({ onContinue }: AuthScreenProps) {
                 <Ionicons name={showPw ? 'eye-off-outline' : 'eye-outline'} size={16} color={Colors.primary} />
               </TouchableOpacity>
             </View>
+
+            {mode === 'register' && (
+              <View style={styles.inputRow}>
+                <View style={styles.pwDot} />
+                <TextInput
+                  value={confirmPw}
+                  onChangeText={setConfirmPw}
+                  placeholder={t('auth.confirmPassword')}
+                  placeholderTextColor={Colors.textMuted}
+                  secureTextEntry={!showPw}
+                  style={styles.input}
+                />
+              </View>
+            )}
           </View>
 
           {/* Main CTA */}
@@ -166,11 +207,26 @@ function SocialBtn({ onPress, icon, label, color }: { onPress: () => void; icon:
 }
 
 const styles = StyleSheet.create({
-  kav: { flex: 1, backgroundColor: Colors.primaryTint },
+  kav: {
+    flex: 1,
+    backgroundColor: Colors.primaryTint,
+    ...Platform.select({
+      web: {
+        maxWidth: 500,
+        width: '100%',
+        marginHorizontal: 'auto',
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderColor: '#EBE8F5',
+        boxShadow: '0 8px 30px rgba(124, 91, 255, 0.06)',
+      },
+      default: {},
+    }),
+  },
   scroll: { flexGrow: 1 },
   heroGrad: {
     paddingTop: 60,
-    paddingHorizontal: 28,
+    paddingHorizontal: 24,
     paddingBottom: 40,
     minHeight: 360,
     overflow: 'hidden',
@@ -199,24 +255,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 48,
   },
-  logo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  logoGrad: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...Shadows.glow,
-  },
-  logoText: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: Colors.textDark,
-    letterSpacing: -0.5,
+  projectLogo: {
+    width: 135,
+    height: 48,
   },
   langBtn: {
     flexDirection: 'row',
@@ -253,7 +294,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: 'rgba(255,255,255,0.97)',
-    marginHorizontal: 16,
+    marginHorizontal: 24,
     marginTop: -24,
     borderRadius: 28,
     padding: 20,

@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, Dimensions, Animated,
+  ScrollView, Dimensions, Animated, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,9 +23,9 @@ import mapboxgl from 'mapbox-gl';
 const MAPBOX_TOKEN = 'pk.eyJ1IjoiYm9uZHpwcm9ubzEiLCJhIjoiY21yMXExczYwMHMwejJwcHJ1b3NzY216bSJ9.YrjzCaT5z32W_kCTOwQOGw';
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
-// ─── Default center: Ho Chi Minh City ────────────────────────────────────────
-const DEFAULT_CENTER: [number, number] = [106.6297, 10.8231];
-const DEFAULT_ZOOM = 13;
+// ─── Default center: Tòa S1.07, Vinhomes Grand Park, Quận 9 ──────────────────
+const DEFAULT_CENTER: [number, number] = [106.8376, 10.8382];
+const DEFAULT_ZOOM = 17;
 
 // ─── Custom MYMO Purple style for Mapbox ─────────────────────────────────────
 const MYMO_STYLE: mapboxgl.Style = {
@@ -125,12 +125,63 @@ export default function MapScreen({
   const [showHeat, setShowHeat] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [cssLoaded, setCssLoaded] = useState(false);
+  const [mapTheme, setMapTheme] = useState<'purple' | 'yellow'>('purple');
 
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const heatMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const MAP_CONTAINER_ID = 'mymo-mapbox-container';
+
+  // ── Apply theme colors to map layers ───────────────────────────────────────
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+
+    const applyColors = () => {
+      const isPurple = mapTheme === 'purple';
+      const colors = isPurple ? {
+        background: '#F5F0FF',
+        water: '#C3B5FF',
+        landuse: '#E8DFFF',
+        building: '#DDD4FF',
+        parks: '#E2D8FF',
+      } : {
+        background: '#FAF6E6', // Sunny light yellow
+        water: '#BDE3FF',      // Beautiful light blue water
+        landuse: '#F5EDA3',    // Light yellow-green parks
+        building: '#FAF0CD',   // Light yellow buildings
+        parks: '#E9E0A6',      // Sunny green-yellow parks
+      };
+
+      const layerPaintProperties: { [layerId: string]: [string, string] } = {
+        'background': ['background-color', colors.background],
+        'water': ['fill-color', colors.water],
+        'landuse': ['fill-color', colors.landuse],
+        'building': ['fill-color', colors.building],
+        'national-park': ['fill-color', colors.parks],
+        'park-outline': ['line-color', colors.parks],
+        'landuse-park': ['fill-color', colors.parks],
+        'building-outline': ['line-color', colors.building],
+      };
+
+      try {
+        Object.entries(layerPaintProperties).forEach(([layerId, [prop, value]]) => {
+          if (map.getLayer(layerId)) {
+            map.setPaintProperty(layerId, prop, value);
+          }
+        });
+      } catch (err) {
+        console.warn('Error applying style paint properties:', err);
+      }
+    };
+
+    if (map.isStyleLoaded()) {
+      applyColors();
+    } else {
+      map.on('style.load', applyColors);
+    }
+  }, [mapTheme, cssLoaded]);
 
   // ── Inject mapbox-gl CSS once and wait for it to load ──────────────────────
   useEffect(() => {
@@ -156,7 +207,7 @@ export default function MapScreen({
 
     const map = new mapboxgl.Map({
       container,
-      style: MYMO_STYLE as mapboxgl.Style,
+      style: 'mapbox://styles/mapbox/streets-v12',
       center: DEFAULT_CENTER,
       zoom: DEFAULT_ZOOM,
       attributionControl: false,
@@ -354,10 +405,21 @@ export default function MapScreen({
             }
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => Toast.show({ type: 'info', text1: t('map.layersTitle'), text2: t('map.layersDesc') })}
+            onPress={() => {
+              const nextTheme = mapTheme === 'purple' ? 'yellow' : 'purple';
+              setMapTheme(nextTheme);
+              Toast.show({
+                type: 'success',
+                text1: nextTheme === 'purple' ? 'Bản đồ Tím Pastel 💜' : 'Bản đồ Nắng ấm ☀️',
+              });
+            }}
             style={styles.mapBtn}
           >
-            <Ionicons name="layers-outline" size={18} color={Colors.primary} />
+            <Ionicons
+              name={mapTheme === 'purple' ? 'color-palette-outline' : 'color-palette'}
+              size={18}
+              color={Colors.primary}
+            />
           </TouchableOpacity>
         </View>
 
@@ -436,6 +498,19 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.primaryTint,
     overflow: 'hidden',
+    ...Platform.select({
+      web: {
+        maxWidth: 500,
+        width: '100%',
+        marginHorizontal: 'auto',
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderColor: '#EBE8F5',
+        position: 'relative',
+        boxShadow: '0 8px 30px rgba(124, 91, 255, 0.06)',
+      },
+      default: {},
+    }),
   },
   map: {
     position: 'absolute',

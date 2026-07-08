@@ -1,6 +1,12 @@
-import React from 'react';
+/**
+ * ProfileScreen.tsx
+ * Redesigned to look extremely modern, GenZ, and premium.
+ * Includes interactive mood status selector, verified user badge, Unsplash banner and avatar,
+ * web layout constraints, and sleek settings groups.
+ */
+import React, { useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ScrollView,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Dimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +16,9 @@ import type { Lang } from '../i18n';
 import Toggle from '../components/Toggle';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const { width: SW } = Dimensions.get('window');
 
 interface ProfileScreenProps {
   locationGranted: boolean;
@@ -19,44 +28,73 @@ interface ProfileScreenProps {
   onLogout: () => void;
 }
 
+const MOODS = [
+  { emoji: '⚡', label: 'Lively' },
+  { emoji: '🌸', label: 'Soft' },
+  { emoji: '🍵', label: 'Chill' },
+  { emoji: '🦋', label: 'Free' },
+  { emoji: '🍿', label: 'Fun' },
+];
+
 export default function ProfileScreen({
   locationGranted, incognito, onToggleLocation, onToggleIncognito, onLogout,
 }: ProfileScreenProps) {
   const { t, lang, setLang } = useI18n();
+  const insets = useSafeAreaInsets();
+  const [currentMood, setCurrentMood] = useState('🍵');
 
   const stats = [
-    { n: '128', l: t('profile.moments') },
-    { n: '12',  l: t('profile.friends') },
-    { n: '38',  l: t('profile.places') },
+    { n: '128', l: t('profile.moments'), icon: 'trail-sign-outline' },
+    { n: '12',  l: t('profile.friends'), icon: 'people-outline' },
+    { n: '38',  l: t('profile.places'), icon: 'location-outline' },
   ];
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      {/* Hero */}
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Cover / Hero image */}
       <View style={styles.heroWrap}>
-        <LinearGradient colors={['#DDD0FF', '#BFA2FF', '#9C7CFF']} style={styles.heroBg} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
+        <Image
+          source={{ uri: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=600&fit=crop' }} // Colorful pastel linear color scheme
+          style={styles.heroBg}
+        />
         <TouchableOpacity
-          onPress={() => Toast.show({ type: 'info', text1: t('profile.settings'), text2: t('profile.settingsDesc') })}
-          style={styles.settingsBtn}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            Toast.show({ type: 'info', text1: t('profile.settings'), text2: t('profile.settingsDesc') });
+          }}
+          style={[styles.settingsBtn, { top: Math.max(16, insets.top) }]}
         >
-          <Ionicons name="settings-outline" size={20} color={Colors.textDark} />
+          <Ionicons name="settings-sharp" size={20} color="#FFF" />
         </TouchableOpacity>
       </View>
 
-      {/* Profile card */}
-      <View style={styles.card}>
-        {/* Avatar */}
+      {/* Profile Card Overlay */}
+      <View style={styles.profileCard}>
+        {/* Avatar and main info */}
         <View style={styles.avatarRow}>
           <TouchableOpacity
             onPress={() => Toast.show({ type: 'info', text1: t('profile.changeAvatar'), text2: t('profile.changeAvatarDesc') })}
-            style={styles.avatarWrap}
+            style={styles.avatarBorder}
+            activeOpacity={0.9}
           >
-            <LinearGradient colors={['#BFA2FF', '#9C7CFF']} style={styles.avatar}>
-              <Text style={styles.avatarEmoji}>✨</Text>
-            </LinearGradient>
+            <Image
+              source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop' }} // matches user face in story tray
+              style={styles.avatarImg}
+            />
+            <View style={styles.moodBadge}>
+              <Text style={styles.moodBadgeText}>{currentMood}</Text>
+            </View>
           </TouchableOpacity>
           <View style={styles.avatarInfo}>
-            <Text style={styles.handle}>{t('profile.handle')}</Text>
+            <View style={styles.nameRow}>
+              <Text style={styles.handle}>Linn Nguyen</Text>
+              <Ionicons name="checkmark-circle" size={16} color="#3B82F6" />
+            </View>
+            <Text style={styles.username}>@linn_nguyen99</Text>
             <Text style={styles.joined}>{t('profile.joined')}</Text>
           </View>
           <TouchableOpacity
@@ -67,14 +105,41 @@ export default function ProfileScreen({
           </TouchableOpacity>
         </View>
 
-        {/* Stats */}
+        {/* GenZ Mood Selector Widget */}
+        <View style={styles.moodWidget}>
+          <Text style={styles.widgetLabel}>Hôm nay bạn thế nào?</Text>
+          <View style={styles.moodRow}>
+            {MOODS.map(m => (
+              <TouchableOpacity
+                key={m.emoji}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setCurrentMood(m.emoji);
+                  Toast.show({ type: 'info', text1: `Tâm trạng: ${m.label} ${m.emoji}` });
+                }}
+                style={[
+                  styles.moodTab,
+                  currentMood === m.emoji && styles.moodTabActive
+                ]}
+              >
+                <Text style={styles.moodEmoji}>{m.emoji}</Text>
+                <Text style={styles.moodLabel}>{m.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Stats segment */}
         <View style={styles.stats}>
-          {stats.map(({ n, l }) => (
+          {stats.map(({ n, l, icon }) => (
             <TouchableOpacity
               key={l}
               onPress={() => Toast.show({ type: 'info', text1: l, text2: `${n} ${l.toLowerCase()}` })}
               style={styles.statBox}
             >
+              <View style={styles.statIconWrap}>
+                <Ionicons name={icon as any} size={15} color={Colors.primary} />
+              </View>
               <Text style={styles.statN}>{n}</Text>
               <Text style={styles.statL}>{l}</Text>
             </TouchableOpacity>
@@ -85,7 +150,7 @@ export default function ProfileScreen({
       {/* Privacy group */}
       <View style={styles.group}>
         <SettingRow
-          icon="location-outline"
+          icon="location"
           label={t('profile.shareLoc')}
           hint={t('profile.shareLocHint')}
           right={
@@ -99,7 +164,7 @@ export default function ProfileScreen({
           }
         />
         <SettingRow
-          icon="glasses-outline"
+          icon="glasses"
           label={t('profile.incognito')}
           hint={t('profile.incognitoHint')}
           disabled={!locationGranted}
@@ -117,22 +182,25 @@ export default function ProfileScreen({
         />
       </View>
 
-      {/* Language group */}
+      {/* Language Toggle pills */}
       <View style={styles.group}>
         <View style={styles.row}>
           <View style={styles.rowIcon}>
-            <Ionicons name="globe-outline" size={16} color={Colors.primary} />
+            <Ionicons name="globe" size={16} color={Colors.primary} />
           </View>
           <Text style={styles.rowLabel}>{t('profile.language')}</Text>
           <View style={styles.langTabs}>
             {(['vi', 'en'] as Lang[]).map(l => (
               <TouchableOpacity
                 key={l}
-                onPress={() => setLang(l)}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setLang(l);
+                }}
                 style={[styles.langTab, lang === l && styles.langTabActive]}
               >
                 {lang === l ? (
-                  <LinearGradient colors={Gradients.primary} style={styles.langTabGrad}>
+                  <LinearGradient colors={Gradients.primary as any} style={styles.langTabGrad}>
                     <Text style={styles.langTabActiveText}>{l === 'vi' ? 'VI' : 'EN'}</Text>
                   </LinearGradient>
                 ) : (
@@ -144,26 +212,26 @@ export default function ProfileScreen({
         </View>
       </View>
 
-      {/* General settings */}
+      {/* General Settings */}
       <View style={styles.group}>
         <SettingRow
-          icon="notifications-outline"
+          icon="notifications"
           label={t('profile.notifications')}
           right={<Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />}
           onPress={() => Toast.show({ type: 'info', text1: t('profile.notifications'), text2: t('profile.notificationsDesc') })}
         />
         <SettingRow
-          icon="person-remove-outline"
+          icon="shield-checkmark"
           label={t('profile.blocked')}
           right={<Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />}
           onPress={() => Toast.show({ type: 'info', text1: t('profile.blocked'), text2: t('profile.blockedDesc') })}
         />
         <SettingRow
-          icon="flash-outline"
+          icon="sparkles"
           label={t('profile.getPlus')}
           right={
             <View style={styles.tryBadge}>
-              <LinearGradient colors={Gradients.primary} style={styles.tryBadgeGrad}>
+              <LinearGradient colors={Gradients.primary as any} style={styles.tryBadgeGrad}>
                 <Text style={styles.tryBadgeText}>{t('common.try')}</Text>
               </LinearGradient>
             </View>
@@ -175,7 +243,7 @@ export default function ProfileScreen({
         />
       </View>
 
-      {/* Logout */}
+      {/* Logout button */}
       <TouchableOpacity
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -187,17 +255,22 @@ export default function ProfileScreen({
         <Text style={styles.logoutText}>{t('common.logout')}</Text>
       </TouchableOpacity>
 
-      <View style={{ height: 40 }} />
+      <View style={{ height: 60 }} />
     </ScrollView>
   );
 }
 
-function SettingRow({
-  icon, label, hint, right, onPress, disabled,
-}: {
-  icon: string; label: string; hint?: string;
-  right: React.ReactNode; onPress?: () => void; disabled?: boolean;
-}) {
+// ─── Component Helpers ────────────────────────────────────────────────────────
+interface SettingRowProps {
+  icon: string;
+  label: string;
+  hint?: string;
+  right: React.ReactNode;
+  onPress?: () => void;
+  disabled?: boolean;
+}
+
+function SettingRow({ icon, label, hint, right, onPress, disabled }: SettingRowProps) {
   const Comp = onPress ? TouchableOpacity : View;
   return (
     <Comp
@@ -217,117 +290,215 @@ function SettingRow({
   );
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.primaryTint,
+    backgroundColor: '#FAFAFF', // Light greyish lavender
+    ...Platform.select({
+      web: {
+        maxWidth: 500,
+        width: '100%',
+        marginHorizontal: 'auto',
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderColor: '#F2F2F2',
+      },
+      default: {},
+    }),
   },
   content: {
     paddingBottom: 40,
   },
   heroWrap: {
-    height: 200,
+    height: 180,
     overflow: 'hidden',
+    position: 'relative',
   },
   heroBg: {
-    ...StyleSheet.absoluteFill,
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
   },
   settingsBtn: {
     position: 'absolute',
-    top: 56,
     right: 16,
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.7)',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(0,0,0,0.3)',
     justifyContent: 'center',
     alignItems: 'center',
-    ...Shadows.soft,
   },
-  card: {
-    marginHorizontal: 20,
-    marginTop: -56,
+
+  // ── Profile card ──
+  profileCard: {
+    marginHorizontal: 16,
+    marginTop: -52,
     backgroundColor: Colors.white,
-    borderRadius: 28,
-    padding: 20,
+    borderRadius: 24,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#F2EEFF',
     ...Shadows.float,
   },
   avatarRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    marginBottom: 18,
+    gap: 12,
   },
-  avatarWrap: {
-    borderRadius: 40,
-    borderWidth: 4,
+  avatarBorder: {
+    position: 'relative',
+    borderRadius: 36,
+    borderWidth: 3,
     borderColor: Colors.white,
+    backgroundColor: '#EEE',
     ...Shadows.glow,
   },
-  avatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+  avatarImg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
+  moodBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FFF',
     justifyContent: 'center',
     alignItems: 'center',
+    ...Shadows.soft,
   },
-  avatarEmoji: {
-    fontSize: 32,
+  moodBadgeText: {
+    fontSize: 13,
   },
   avatarInfo: {
     flex: 1,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
   handle: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '900',
     color: Colors.textDark,
   },
-  joined: {
-    fontSize: 11,
+  username: {
+    fontSize: 12,
     color: Colors.textMuted,
-    marginTop: 3,
+    marginTop: 1,
+  },
+  joined: {
+    fontSize: 10,
+    color: Colors.primaryLight,
+    fontWeight: '600',
+    marginTop: 4,
   },
   editBtn: {
-    backgroundColor: Colors.primaryTint,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
+    backgroundColor: '#F5F2FF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
   },
   editText: {
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '800',
     color: Colors.primary,
   },
+
+  // ── Mood widget ──
+  moodWidget: {
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F6F5FC',
+  },
+  widgetLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: Colors.textDark,
+    marginBottom: 8,
+  },
+  moodRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  moodTab: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    backgroundColor: '#FAF9FF',
+    borderWidth: 1,
+    borderColor: '#F0EEFC',
+  },
+  moodTabActive: {
+    backgroundColor: '#EBE5FF',
+    borderColor: '#7C5BFF',
+  },
+  moodEmoji: {
+    fontSize: 16,
+  },
+  moodLabel: {
+    fontSize: 9,
+    color: Colors.textMuted,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+
+  // ── Stats ──
   stats: {
     flexDirection: 'row',
     gap: 8,
+    marginTop: 16,
   },
   statBox: {
     flex: 1,
-    backgroundColor: Colors.primaryTint,
+    backgroundColor: '#FAF9FF',
     borderRadius: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F2EEFF',
+  },
+  statIconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#F2EEFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
   },
   statN: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '900',
     color: Colors.textDark,
   },
   statL: {
-    fontSize: 9,
-    fontWeight: '700',
+    fontSize: 8,
+    fontWeight: '800',
     color: Colors.primary,
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 3,
+    letterSpacing: 0.6,
+    marginTop: 2,
   },
+
+  // ── List groups ──
   group: {
     backgroundColor: Colors.white,
-    marginHorizontal: 20,
-    marginTop: 16,
-    borderRadius: 24,
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 20,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#F6F5FC',
     ...Shadows.soft,
   },
   row: {
@@ -335,16 +506,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.primaryTint,
+    borderBottomColor: '#F5F2FF',
   },
   rowDisabled: {
     opacity: 0.5,
   },
   rowIcon: {
-    width: 34,
-    height: 34,
+    width: 30,
+    height: 30,
     borderRadius: 10,
     backgroundColor: Colors.primaryTint,
     justifyContent: 'center',
@@ -354,70 +525,69 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   rowLabel: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '700',
     color: Colors.textDark,
   },
   rowHint: {
-    fontSize: 11,
+    fontSize: 10,
     color: Colors.textMuted,
-    marginTop: 2,
+    marginTop: 1,
   },
   langTabs: {
     flexDirection: 'row',
     backgroundColor: Colors.primaryTint,
-    borderRadius: 16,
+    borderRadius: 14,
     padding: 3,
   },
   langTab: {
-    borderRadius: 12,
+    borderRadius: 10,
     overflow: 'hidden',
   },
   langTabActive: {},
   langTabGrad: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
   langTabActiveText: {
     color: Colors.white,
-    fontWeight: '700',
-    fontSize: 12,
+    fontWeight: '800',
+    fontSize: 11,
   },
   langTabText: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     color: Colors.primary,
-    fontWeight: '700',
-    fontSize: 12,
+    fontWeight: '800',
+    fontSize: 11,
   },
   tryBadge: {
-    borderRadius: 20,
+    borderRadius: 14,
     overflow: 'hidden',
     ...Shadows.glow,
   },
   tryBadgeGrad: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
   tryBadgeText: {
     color: Colors.white,
-    fontWeight: '700',
-    fontSize: 11,
+    fontWeight: '800',
+    fontSize: 9,
   },
   logoutBtn: {
-    marginHorizontal: 20,
+    marginHorizontal: 16,
     marginTop: 16,
-    paddingVertical: 14,
-    borderRadius: 20,
+    paddingVertical: 12,
+    borderRadius: 16,
     borderWidth: 1.5,
-    borderColor: Colors.primarySoft,
-    backgroundColor: Colors.white,
+    borderColor: '#FFE3E8',
+    backgroundColor: '#FFF5F6',
     alignItems: 'center',
-    ...Shadows.soft,
   },
   logoutText: {
-    color: Colors.primary,
-    fontWeight: '700',
-    fontSize: 14,
+    color: '#FF3D6E',
+    fontWeight: '800',
+    fontSize: 13,
   },
 });
