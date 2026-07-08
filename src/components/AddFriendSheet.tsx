@@ -21,20 +21,22 @@ export default function AddFriendSheet({ onClose }: AddFriendSheetProps) {
   const myLink = 'mymo.app/u/you.mymo';
   const slideAnim = useRef(new Animated.Value(400)).current;
 
+  const useNativeDriver = Platform.OS !== 'web';
+
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: 0,
-      useNativeDriver: true,
+      useNativeDriver,
       tension: 65,
       friction: 11,
     }).start();
-  }, []);
+  }, [slideAnim, useNativeDriver]);
 
   const close = () => {
     Animated.timing(slideAnim, {
       toValue: 400,
       duration: 250,
-      useNativeDriver: true,
+      useNativeDriver,
     }).start(onClose);
   };
 
@@ -60,8 +62,11 @@ export default function AddFriendSheet({ onClose }: AddFriendSheetProps) {
       <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={close} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.wrapper}
-        pointerEvents="box-none"
+        style={[
+          styles.wrapper,
+          Platform.OS === 'web' ? { pointerEvents: 'box-none' as const } : undefined,
+        ]}
+        pointerEvents={Platform.OS === 'web' ? undefined : 'box-none'}
       >
         <Animated.View style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}>
           <SparkleField count={10} />

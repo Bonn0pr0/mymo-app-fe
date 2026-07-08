@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 // MYMO Design Tokens — Purple Palette
 export const Colors = {
   // Brand primaries
@@ -66,25 +68,34 @@ export const Gradients = {
 };
 
 export const Shadows = {
-  soft: {
-    shadowColor: '#7C5BFF',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  float: {
-    shadowColor: '#7C5BFF',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    elevation: 12,
-  },
-  glow: {
-    shadowColor: '#7C5BFF',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 10,
-  },
+  soft: Platform.select({
+    web: { boxShadow: '0 2px 8px rgba(124, 91, 255, 0.12)' },
+    default: {
+      shadowColor: '#7C5BFF',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      elevation: 4,
+    },
+  }),
+  float: Platform.select({
+    web: { boxShadow: '0 8px 30px rgba(124, 91, 255, 0.06)' },
+    default: {
+      shadowColor: '#7C5BFF',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.2,
+      shadowRadius: 20,
+      elevation: 12,
+    },
+  }),
+  glow: Platform.select({
+    web: { boxShadow: '0 4px 16px rgba(124, 91, 255, 0.4)' },
+    default: {
+      shadowColor: '#7C5BFF',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.4,
+      shadowRadius: 16,
+      elevation: 10,
+    },
+  }),
 };

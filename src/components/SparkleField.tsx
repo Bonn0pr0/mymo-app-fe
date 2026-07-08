@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { View, StyleSheet, Animated } from 'react-native';
+import { View, StyleSheet, Animated, Platform } from 'react-native';
 import { Colors } from '../constants/colors';
 
 interface SparkleFieldProps {
@@ -17,7 +17,13 @@ export default function SparkleField({ count = 10, size = 10 }: SparkleFieldProp
   });
 
   return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+    <View
+      style={[
+        StyleSheet.absoluteFill,
+        Platform.OS === 'web' ? { pointerEvents: 'none' as const } : undefined,
+      ]}
+      pointerEvents={Platform.OS === 'web' ? undefined : 'none'}
+    >
       {stars.map((p, i) => (
         <SparkleItem key={i} x={p.x} y={p.y} delay={p.d} size={p.s} />
       ))}
@@ -29,11 +35,12 @@ function SparkleItem({ x, y, delay, size }: { x: number; y: number; delay: numbe
   const opacity = useRef(new Animated.Value(0.3)).current;
 
   React.useEffect(() => {
+    const useNativeDriver = Platform.OS !== 'web';
     const anim = Animated.loop(
       Animated.sequence([
         Animated.delay(delay),
-        Animated.timing(opacity, { toValue: 1, duration: 800, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0.2, duration: 800, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 800, useNativeDriver }),
+        Animated.timing(opacity, { toValue: 0.2, duration: 800, useNativeDriver }),
       ])
     );
     anim.start();

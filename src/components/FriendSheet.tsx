@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import {
   View, Text, Modal, TouchableOpacity, StyleSheet, Animated,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,20 +20,22 @@ export default function FriendSheet({ friend, onClose, onMessage }: FriendSheetP
   const { t } = useI18n();
   const slideAnim = useRef(new Animated.Value(400)).current;
 
+  const useNativeDriver = Platform.OS !== 'web';
+
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: 0,
-      useNativeDriver: true,
+      useNativeDriver,
       tension: 65,
       friction: 11,
     }).start();
-  }, []);
+  }, [slideAnim, useNativeDriver]);
 
   const close = () => {
     Animated.timing(slideAnim, {
       toValue: 400,
       duration: 250,
-      useNativeDriver: true,
+      useNativeDriver,
     }).start(onClose);
   };
 

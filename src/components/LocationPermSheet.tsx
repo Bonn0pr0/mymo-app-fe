@@ -19,14 +19,16 @@ export function LocationPermSheet({ onAllow, onDeny }: LocationPermSheetProps) {
   const { t } = useI18n();
   const slideAnim = useRef(new Animated.Value(300)).current;
 
+  const useNativeDriver = Platform.OS !== 'web';
+
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: 0,
-      useNativeDriver: true,
+      useNativeDriver,
       tension: 65,
       friction: 11,
     }).start();
-  }, []);
+  }, [slideAnim, useNativeDriver]);
 
   return (
     <Modal transparent animationType="fade" statusBarTranslucent>

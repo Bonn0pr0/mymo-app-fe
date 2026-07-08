@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { TouchableOpacity, Animated, StyleSheet } from 'react-native';
+import { TouchableOpacity, Animated, StyleSheet, Platform } from 'react-native';
 import { Colors } from '../constants/colors';
 
 interface ToggleProps {
@@ -49,17 +49,26 @@ const styles = StyleSheet.create({
   bg: {
     borderRadius: 14,
   },
-  thumb: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: Colors.white,
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
-  },
+  thumb: Platform.select({
+    web: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: Colors.white,
+      boxShadow: '0 2px 4px rgba(124, 91, 255, 0.3)',
+    },
+    default: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: Colors.white,
+      shadowColor: Colors.primary,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.3,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+  }),
   disabled: {
     opacity: 0.4,
   },

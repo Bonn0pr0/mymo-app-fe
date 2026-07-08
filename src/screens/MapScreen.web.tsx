@@ -372,14 +372,26 @@ export default function MapScreen({
 
       {/* ── Incognito ghost overlay ── */}
       {locationGranted && incognito && (
-        <View style={styles.ghostPin} pointerEvents="none">
+        <View
+          style={[
+            styles.ghostPin,
+            Platform.OS === 'web' ? { pointerEvents: 'none' as const } : undefined,
+          ]}
+          pointerEvents={Platform.OS === 'web' ? undefined : 'none'}
+        >
           <Ionicons name="glasses-outline" size={18} color={Colors.primary} />
         </View>
       )}
 
       {/* ── Search bar + controls overlay ── */}
-      <View style={styles.topBar} pointerEvents="box-none">
-        <View style={styles.searchRow} pointerEvents="auto">
+      <View
+        style={[styles.topBar, Platform.OS === 'web' ? { pointerEvents: 'box-none' as const } : undefined]}
+        pointerEvents={Platform.OS === 'web' ? undefined : 'box-none'}
+      >
+        <View
+          style={[styles.searchRow, Platform.OS === 'web' ? { pointerEvents: 'auto' as const } : undefined]}
+          pointerEvents={Platform.OS === 'web' ? undefined : 'auto'}
+        >
           <View style={styles.searchBox}>
             <Ionicons name="search-outline" size={16} color={Colors.primary} />
             <TextInput

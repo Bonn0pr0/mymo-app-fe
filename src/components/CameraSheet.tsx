@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import {
   View, Text, Modal, TouchableOpacity, StyleSheet, Animated,
-  StatusBar,
+  StatusBar, Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,20 +20,22 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
   const [captured, setCaptured] = useState(false);
   const slideAnim = useRef(new Animated.Value(800)).current;
 
+  const useNativeDriver = Platform.OS !== 'web';
+
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: 0,
-      useNativeDriver: true,
+      useNativeDriver,
       tension: 50,
       friction: 10,
     }).start();
-  }, []);
+  }, [slideAnim, useNativeDriver]);
 
   const close = () => {
     Animated.timing(slideAnim, {
       toValue: 800,
       duration: 300,
-      useNativeDriver: true,
+      useNativeDriver,
     }).start(onClose);
   };
 
