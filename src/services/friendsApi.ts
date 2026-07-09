@@ -17,6 +17,7 @@ export interface FriendSummary {
   avatarUrl: string | null;
   requestedAt?: string;
   mutualFriendsCount?: number;
+  isOnline?: boolean;
 }
 
 export interface PendingFriendRequest {
@@ -27,19 +28,63 @@ export interface PendingFriendRequest {
   requestedAt: string;
 }
 
-function normalizePendingRequest(raw: Record<string, unknown>): PendingFriendRequest {
-  return {
-    userId: String(raw.requesterId || raw.userId || raw.id),
-    username: String(raw.requesterUsername || raw.username || ''),
-    displayName: String(raw.requesterDisplayName || raw.displayName || raw.requesterUsername || 'Friend'),
-    avatarUrl: (raw.requesterAvatarUrl ?? raw.avatarUrl ?? null) as string | null,
-    requestedAt: String(raw.requestedAt || raw.createdAt || new Date().toISOString()),
-  };
+export interface SentFriendRequest {
+  userId: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+  requestedAt: string;
+}
+
+export interface BlockedUser {
+  userId: string;
+  username: string;
+  displayName: string;
 }
 
 export interface FriendStatusResponse {
   userId: string;
   status: string;
+}
+
+function normalizeFriend(raw: Record<string, unknown>): FriendSummary {
+  return {
+    userId: String(raw.userId || raw.UserId || ''),
+    username: String(raw.username || raw.Username || ''),
+    displayName: String(raw.displayName || raw.DisplayName || raw.username || raw.Username || 'Friend'),
+    avatarUrl: (raw.avatarUrl ?? raw.AvatarUrl ?? null) as string | null,
+    requestedAt: raw.requestedAt ? String(raw.requestedAt) : undefined,
+    mutualFriendsCount: raw.mutualFriendsCount != null ? Number(raw.mutualFriendsCount) : undefined,
+    isOnline: Boolean(raw.isOnline ?? raw.IsOnline ?? false),
+  };
+}
+
+function normalizePendingRequest(raw: Record<string, unknown>): PendingFriendRequest {
+  return {
+    userId: String(raw.requesterId || raw.RequesterId || raw.userId || raw.id),
+    username: String(raw.requesterUsername || raw.RequesterUsername || raw.username || ''),
+    displayName: String(raw.requesterDisplayName || raw.RequesterDisplayName || raw.displayName || raw.requesterUsername || 'Friend'),
+    avatarUrl: (raw.requesterAvatarUrl ?? raw.RequesterAvatarUrl ?? raw.avatarUrl ?? null) as string | null,
+    requestedAt: String(raw.requestedAt || raw.RequestedAt || raw.createdAt || new Date().toISOString()),
+  };
+}
+
+function normalizeSentRequest(raw: Record<string, unknown>): SentFriendRequest {
+  return {
+    userId: String(raw.receiverId || raw.ReceiverId || raw.userId || ''),
+    username: String(raw.receiverUsername || raw.ReceiverUsername || raw.username || ''),
+    displayName: String(raw.receiverDisplayName || raw.ReceiverDisplayName || raw.displayName || raw.receiverUsername || 'Friend'),
+    avatarUrl: (raw.receiverAvatarUrl ?? raw.ReceiverAvatarUrl ?? raw.avatarUrl ?? null) as string | null,
+    requestedAt: String(raw.requestedAt || raw.RequestedAt || raw.createdAt || new Date().toISOString()),
+  };
+}
+
+function normalizeBlockedUser(raw: Record<string, unknown>): BlockedUser {
+  return {
+    userId: String(raw.userId || raw.UserId || ''),
+    username: String(raw.username || raw.Username || ''),
+    displayName: String(raw.displayName || raw.DisplayName || raw.username || 'User'),
+  };
 }
 
 async function getAuthToken(): Promise<string | null> {
@@ -114,8 +159,8 @@ export async function removeFriend(friendId: string): Promise<boolean> {
 }
 
 export async function getFriends(): Promise<FriendSummary[]> {
-  const response = await requestJson<ApiResponse<FriendSummary[]>>('/friends', 'GET');
-  return response.data;
+  const response = await requestJson<ApiResponse<Record<string, unknown>[]>>('/friends', 'GET');
+  return (response.data || []).map(normalizeFriend);
 }
 
 export async function getFriendRequests(): Promise<PendingFriendRequest[]> {
@@ -123,9 +168,9 @@ export async function getFriendRequests(): Promise<PendingFriendRequest[]> {
   return (response.data || []).map(normalizePendingRequest);
 }
 
-export async function getSentRequests(): Promise<FriendSummary[]> {
-  const response = await requestJson<ApiResponse<FriendSummary[]>>('/friends/sent', 'GET');
-  return response.data;
+export async function getSentRequests(): Promise<SentFriendRequest[]> {
+  const response = await requestJson<ApiResponse<Record<string, unknown>[]>>('/friends/sent', 'GET');
+  return (response.data || []).map(normalizeSentRequest);
 }
 
 export async function getFriendStatus(userId: string): Promise<FriendStatusResponse> {
@@ -134,13 +179,13 @@ export async function getFriendStatus(userId: string): Promise<FriendStatusRespo
 }
 
 export async function getFriendSuggestions(): Promise<FriendSummary[]> {
-  const response = await requestJson<ApiResponse<FriendSummary[]>>('/friends/suggestions', 'GET');
-  return response.data;
+  const response = await requestJson<ApiResponse<Record<string, unknown>[]>>('/friends/suggestions', 'GET');
+  return (response.data || []).map(normalizeFriend);
 }
 
 export async function getMutualFriends(userId: string): Promise<FriendSummary[]> {
-  const response = await requestJson<ApiResponse<FriendSummary[]>>(`/friends/mutual/${userId}`, 'GET');
-  return response.data;
+  const response = await requestJson<ApiResponse<Record<string, unknown>[]>>(`/friends/mutual/${userId}`, 'GET');
+  return (response.data || []).map(normalizeFriend);
 }
 
 export async function getFriendCount(): Promise<number> {
@@ -149,8 +194,8 @@ export async function getFriendCount(): Promise<number> {
 }
 
 export async function getOnlineFriends(): Promise<FriendSummary[]> {
-  const response = await requestJson<ApiResponse<FriendSummary[]>>('/friends/online', 'GET');
-  return response.data;
+  const response = await requestJson<ApiResponse<Record<string, unknown>[]>>('/friends/online', 'GET');
+  return (response.data || []).map(normalizeFriend);
 }
 
 export async function getFriendsLocations(): Promise<FriendLocation[]> {
@@ -163,8 +208,8 @@ export async function getFriendsLocations(): Promise<FriendLocation[]> {
 }
 
 export async function searchFriends(keyword: string): Promise<FriendSummary[]> {
-  const response = await requestJson<ApiResponse<FriendSummary[]>>(`/friends/search?keyword=${encodeURIComponent(keyword)}`, 'GET');
-  return response.data;
+  const response = await requestJson<ApiResponse<Record<string, unknown>[]>>(`/friends/search?keyword=${encodeURIComponent(keyword)}`, 'GET');
+  return (response.data || []).map(normalizeFriend);
 }
 
 export async function blockFriend(userId: string): Promise<boolean> {
@@ -172,7 +217,33 @@ export async function blockFriend(userId: string): Promise<boolean> {
   return response.data;
 }
 
-export async function getBlockedFriends(): Promise<FriendSummary[]> {
-  const response = await requestJson<ApiResponse<FriendSummary[]>>('/friends/block', 'GET');
+export async function unblockFriend(userId: string): Promise<boolean> {
+  const response = await requestJson<ApiResponse<boolean>>(`/friends/block/${userId}`, 'DELETE');
   return response.data;
 }
+
+export async function getBlockedFriends(): Promise<BlockedUser[]> {
+  const response = await requestJson<ApiResponse<Record<string, unknown>[]>>('/friends/block', 'GET');
+  return (response.data || []).map(normalizeBlockedUser);
+}
+
+export default {
+  requestFriend,
+  acceptFriend,
+  rejectFriend,
+  cancelFriendRequest,
+  removeFriend,
+  getFriends,
+  getFriendRequests,
+  getSentRequests,
+  getFriendStatus,
+  getFriendSuggestions,
+  getMutualFriends,
+  getFriendCount,
+  getOnlineFriends,
+  getFriendsLocations,
+  searchFriends,
+  blockFriend,
+  unblockFriend,
+  getBlockedFriends,
+};

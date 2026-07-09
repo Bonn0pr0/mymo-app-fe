@@ -87,6 +87,7 @@ export interface NearbyPost {
   createdAt: string;
   likeCount: number;
   commentCount: number;
+  isExpired?: boolean;
 }
 
 export interface PostMedia {
@@ -106,6 +107,7 @@ export interface FeedPost {
   likeCount: number;
   commentCount: number;
   media: PostMedia[];
+  isExpired?: boolean;
 }
 
 export interface PostView {
@@ -116,6 +118,127 @@ export interface PostView {
   caption: string;
   likeCount: number;
   commentCount: number;
+}
+
+export interface PostDetailOwner {
+  userId: string;
+  displayName: string | null;
+  username: string;
+  avatarUrl: string | null;
+}
+
+export interface PostDetailPlace {
+  placeId: string;
+  name: string;
+  address: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  thumbnailUrl: string | null;
+}
+
+export interface PostDetailMedia {
+  mediaId: string;
+  url: string;
+  thumbnailUrl: string | null;
+  mediaType: string;
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+}
+
+export interface PostDetail {
+  postId: string;
+  caption: string | null;
+  postType: string;
+  visibility: string;
+  createdAt: string;
+  updatedAt: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  likeCount: number;
+  commentCount: number;
+  viewCount: number;
+  shareCount: number;
+  isLiked: boolean;
+  owner: PostDetailOwner;
+  place: PostDetailPlace | null;
+  media: PostDetailMedia[];
+}
+
+function normalizePostDetail(raw: Record<string, unknown>): PostDetail {
+  const ownerRaw = (raw.owner ?? raw.Owner ?? {}) as Record<string, unknown>;
+  const placeRaw = raw.place ?? raw.Place;
+  const mediaRaw = (raw.media ?? raw.Media ?? []) as Record<string, unknown>[];
+
+  return {
+    postId: String(raw.postId ?? raw.PostId ?? ''),
+    caption: (raw.caption ?? raw.Caption ?? null) as string | null,
+    postType: String(raw.postType ?? raw.PostType ?? 'Image'),
+    visibility: String(raw.visibility ?? raw.Visibility ?? 'Public'),
+    createdAt: String(raw.createdAt ?? raw.CreatedAt ?? ''),
+    updatedAt: (raw.updatedAt ?? raw.UpdatedAt ?? null) as string | null,
+    latitude: raw.latitude != null || raw.Latitude != null
+      ? Number(raw.latitude ?? raw.Latitude)
+      : null,
+    longitude: raw.longitude != null || raw.Longitude != null
+      ? Number(raw.longitude ?? raw.Longitude)
+      : null,
+    likeCount: Number(raw.likeCount ?? raw.LikeCount ?? 0),
+    commentCount: Number(raw.commentCount ?? raw.CommentCount ?? 0),
+    viewCount: Number(raw.viewCount ?? raw.ViewCount ?? 0),
+    shareCount: Number(raw.shareCount ?? raw.ShareCount ?? 0),
+    isLiked: Boolean(raw.isLiked ?? raw.IsLiked ?? false),
+    owner: {
+      userId: String(ownerRaw.userId ?? ownerRaw.UserId ?? ''),
+      displayName: (ownerRaw.displayName ?? ownerRaw.DisplayName ?? null) as string | null,
+      username: String(ownerRaw.username ?? ownerRaw.Username ?? ''),
+      avatarUrl: (ownerRaw.avatarUrl ?? ownerRaw.AvatarUrl ?? null) as string | null,
+    },
+    place: placeRaw
+      ? {
+          placeId: String((placeRaw as Record<string, unknown>).placeId ?? (placeRaw as Record<string, unknown>).PlaceId ?? ''),
+          name: String((placeRaw as Record<string, unknown>).name ?? (placeRaw as Record<string, unknown>).Name ?? ''),
+          address: ((placeRaw as Record<string, unknown>).address ?? (placeRaw as Record<string, unknown>).Address ?? null) as string | null,
+          city: ((placeRaw as Record<string, unknown>).city ?? (placeRaw as Record<string, unknown>).City ?? null) as string | null,
+          latitude: (placeRaw as Record<string, unknown>).latitude != null || (placeRaw as Record<string, unknown>).Latitude != null
+            ? Number((placeRaw as Record<string, unknown>).latitude ?? (placeRaw as Record<string, unknown>).Latitude)
+            : null,
+          longitude: (placeRaw as Record<string, unknown>).longitude != null || (placeRaw as Record<string, unknown>).Longitude != null
+            ? Number((placeRaw as Record<string, unknown>).longitude ?? (placeRaw as Record<string, unknown>).Longitude)
+            : null,
+          thumbnailUrl: ((placeRaw as Record<string, unknown>).thumbnailUrl ?? (placeRaw as Record<string, unknown>).ThumbnailUrl ?? null) as string | null,
+        }
+      : null,
+    media: mediaRaw.map(item => ({
+      mediaId: String(item.mediaId ?? item.MediaId ?? ''),
+      url: String(item.url ?? item.Url ?? ''),
+      thumbnailUrl: (item.thumbnailUrl ?? item.ThumbnailUrl ?? null) as string | null,
+      mediaType: String(item.mediaType ?? item.MediaType ?? 'Image'),
+      width: item.width != null || item.Width != null ? Number(item.width ?? item.Width) : null,
+      height: item.height != null || item.Height != null ? Number(item.height ?? item.Height) : null,
+      duration: item.duration != null || item.Duration != null ? Number(item.duration ?? item.Duration) : null,
+    })),
+  };
+}
+
+export async function getPostById(postId: string): Promise<PostDetail> {
+  const response = await requestJson<ApiResponse<Record<string, unknown>>>(`/posts/${postId}`, 'GET');
+  return normalizePostDetail(response.data);
+}
+
+export async function likePost(postId: string): Promise<void> {
+  const response = await requestJson<ApiResponse<boolean>>(`/posts/${postId}/like`, 'POST');
+  if (!response.success) {
+    throw new Error(response.message || 'Unable to like post');
+  }
+}
+
+export async function unlikePost(postId: string): Promise<void> {
+  const response = await requestJson<ApiResponse<boolean>>(`/posts/${postId}/like`, 'DELETE');
+  if (!response.success) {
+    throw new Error(response.message || 'Unable to unlike post');
+  }
 }
 
 export function getPostThumbnail(post: FeedPost | NearbyPost): string | null {
@@ -169,6 +292,9 @@ export async function getMyPosts(): Promise<FeedPost[]> {
 
 export default {
   createPost,
+  getPostById,
+  likePost,
+  unlikePost,
   getNearbyPosts,
   getFriendsFeed,
   getFeed,

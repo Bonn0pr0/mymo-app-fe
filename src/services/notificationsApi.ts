@@ -43,46 +43,86 @@ async function requestJson<T>(path: string, method: string, body?: unknown): Pro
   return data as T;
 }
 
+export type NotificationUiType =
+  | 'request'
+  | 'friend_accepted'
+  | 'friend_rejected'
+  | 'like'
+  | 'comment'
+  | 'info';
+
+export interface NotificationSender {
+  userId: string;
+  displayName: string;
+  avatarUrl?: string | null;
+}
+
 export interface NotificationItem {
   id: string;
-  type: string;
+  type: NotificationUiType;
   title?: string;
   body?: string;
   createdAt?: string;
   isRead?: boolean;
   senderId?: string;
+  senderName?: string;
+  avatarUrl?: string | null;
   referenceId?: string | null;
+  postId?: string | null;
+  groupIds?: string[];
+  senders?: NotificationSender[];
+  isGrouped?: boolean;
+  count?: number;
+}
+
+interface RawNotificationSender {
+  userId: string;
+  displayName?: string | null;
+  avatarUrl?: string | null;
 }
 
 interface RawNotificationItem {
   notificationId: string;
-  senderId: string;
+  senderId?: string;
   type: string;
   title?: string;
   content?: string;
   referenceId?: string | null;
   isRead?: boolean;
   createdAt?: string;
+  sender?: RawNotificationSender | null;
 }
 
-function mapNotificationType(rawType: string, title?: string, content?: string): string {
+function mapNotificationType(rawType: string, title?: string, content?: string): NotificationUiType {
   const type = rawType.toLowerCase();
   const text = `${title || ''} ${content || ''}`.toLowerCase();
+
+  if (type === 'friendaccepted' || type.includes('friend_accepted')) return 'friend_accepted';
+  if (type === 'postliked' || type === 'like' || type.includes('postliked')) return 'like';
+  if (type === 'postcommented' || type === 'comment' || type.includes('postcommented')) return 'comment';
 
   if (type.includes('friendrequest') || type.includes('friend_request')) {
     if (text.includes('accepted') || text.includes('đồng ý')) return 'friend_accepted';
     if (text.includes('rejected') || text.includes('declined') || text.includes('từ chối')) return 'friend_rejected';
-    if (/sent you|has sent|friend request/.test(text)) return 'request';
+    if (/sent you|has sent|friend request|lời mời/.test(text)) return 'request';
     return 'info';
   }
 
   if (type.includes('like')) return 'like';
+  if (type.includes('comment')) return 'comment';
   return 'info';
 }
 
-function extractSenderName(title?: string, content?: string): string | null {
+function extractSenderName(
+  sender?: RawNotificationSender | null,
+  senderId?: string,
+  title?: string,
+  content?: string,
+): string | null {
+  if (sender?.displayName) return sender.displayName;
+
   const text = content || title || '';
-  const match = text.match(/^(.+?)\s+(sent you|accepted your|declined your)/i);
+  const match = text.match(/^(.+?)\s+(sent you|accepted your|declined your|liked your|commented on)/i);
   return match?.[1]?.trim() || null;
 }
 
@@ -90,7 +130,9 @@ export async function getNotifications(): Promise<NotificationItem[]> {
   const res = await requestJson<ApiResponse<RawNotificationItem[]>>('/notifications', 'GET');
   return (res.data || []).map(item => {
     const mappedType = mapNotificationType(item.type, item.title, item.content);
-    const senderName = extractSenderName(item.title, item.content);
+    const senderId = item.sender?.userId || item.senderId;
+    const senderName = extractSenderName(item.sender, senderId, item.title, item.content);
+    const isPostRelated = mappedType === 'like' || mappedType === 'comment';
 
     return {
       id: item.notificationId,
@@ -99,8 +141,11 @@ export async function getNotifications(): Promise<NotificationItem[]> {
       body: item.content || item.title,
       createdAt: item.createdAt,
       isRead: item.isRead,
-      senderId: item.senderId,
+      senderId,
+      senderName: senderName || undefined,
+      avatarUrl: item.sender?.avatarUrl ?? null,
       referenceId: item.referenceId,
+      postId: isPostRelated ? (item.referenceId || null) : null,
     };
   });
 }
@@ -111,13 +156,29 @@ export async function getUnreadCount(): Promise<number> {
 }
 
 export async function markAsRead(id: string): Promise<boolean> {
-  const res = await requestJson<ApiResponse<boolean>>(`/notifications/${id}/read`, 'PUT');
+  const res = await requestJson<ApiResponse<boolean>>(`/notifications/${id}/read`, 'PATCH');
   return res.data;
 }
 
 export async function markAllRead(): Promise<boolean> {
-  const res = await requestJson<ApiResponse<boolean>>('/notifications/read-all', 'PUT');
-  return res.data;
+  try {
+    const res = await requestJson<ApiResponse<boolean>>('/notifications/read-all', 'PATCH');
+    return res.data;
+  } catch {
+    const res = await requestJson<ApiResponse<boolean>>('/notifications/read-all', 'PUT');
+    return res.data;
+  }
+}
+
+export async function clearAllNotifications(): Promise<boolean> {
+  try {
+    const res = await requestJson<ApiResponse<boolean>>('/notifications/clear-all', 'DELETE');
+    return res.data;
+  } catch {
+    const items = await getNotifications();
+    await Promise.all(items.map(item => deleteNotification(item.id).catch(() => false)));
+    return true;
+  }
 }
 
 export async function deleteNotification(id: string): Promise<boolean> {
@@ -130,5 +191,6 @@ export default {
   getUnreadCount,
   markAsRead,
   markAllRead,
+  clearAllNotifications,
   deleteNotification,
 };

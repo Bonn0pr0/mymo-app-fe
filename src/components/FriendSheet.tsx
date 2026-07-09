@@ -1,13 +1,15 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   View, Text, Modal, TouchableOpacity, StyleSheet, Animated,
-  Platform,
+  Platform, DeviceEventEmitter, ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Gradients, Shadows } from '../constants/colors';
+import { useAppContentWidth } from '../constants/layout';
 import { useI18n } from '../i18n';
 import type { Friend } from '../constants/data';
+import { removeFriend, blockFriend } from '../services/friendsApi';
 import Toast from 'react-native-toast-message';
 
 interface FriendSheetProps {
@@ -18,7 +20,10 @@ interface FriendSheetProps {
 
 export default function FriendSheet({ friend, onClose, onMessage }: FriendSheetProps) {
   const { t } = useI18n();
+  const appWidth = useAppContentWidth();
   const slideAnim = useRef(new Animated.Value(400)).current;
+  const [busy, setBusy] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<'remove' | 'block' | null>(null);
 
   const useNativeDriver = Platform.OS !== 'web';
 
@@ -51,10 +56,41 @@ export default function FriendSheet({ friend, onClose, onMessage }: FriendSheetP
     ? '#FEF3C7'
     : Colors.primarySoft;
 
+  const confirmRemove = () => setConfirmAction('remove');
+
+  const confirmBlock = () => setConfirmAction('block');
+
+  const runConfirmedAction = async () => {
+    if (!confirmAction) return;
+    setBusy(true);
+    try {
+      if (confirmAction === 'remove') {
+        await removeFriend(friend.id);
+        Toast.show({ type: 'success', text1: `${t('friends.removed')} ${friend.name}` });
+      } else {
+        await blockFriend(friend.id);
+        Toast.show({ type: 'info', text1: `${t('friends.blocked')} ${friend.name}` });
+      }
+      DeviceEventEmitter.emit('friends:refetch');
+      close();
+    } catch (err) {
+      Toast.show({ type: 'error', text1: String(err instanceof Error ? err.message : 'Unable to complete action') });
+    } finally {
+      setBusy(false);
+      setConfirmAction(null);
+    }
+  };
+
   return (
     <Modal transparent animationType="fade" statusBarTranslucent onRequestClose={close}>
       <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={close} />
-      <Animated.View style={[styles.sheet, { transform: [{ translateY: slideAnim }] }]}>
+      <View style={styles.sheetOuter}>
+        <Animated.View
+          style={[
+            styles.sheet,
+            { width: appWidth, transform: [{ translateY: slideAnim }] },
+          ]}
+        >
         <View style={styles.handle} />
 
         <View style={styles.header}>
@@ -117,7 +153,65 @@ export default function FriendSheet({ friend, onClose, onMessage }: FriendSheetP
             </LinearGradient>
           </TouchableOpacity>
         </View>
-      </Animated.View>
+
+        <View style={styles.dangerActions}>
+          {confirmAction ? (
+            <View style={styles.confirmBanner}>
+              <Text style={styles.confirmBannerText}>
+                {confirmAction === 'remove'
+                  ? `${t('friends.removeConfirm')} ${friend.name}?`
+                  : `${t('friends.blockConfirm')} ${friend.name}?`}
+              </Text>
+              <View style={styles.confirmBannerActions}>
+                <TouchableOpacity
+                  onPress={() => setConfirmAction(null)}
+                  disabled={busy}
+                  style={styles.confirmCancelBtn}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.confirmCancelText}>{t('common.cancel')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={runConfirmedAction}
+                  disabled={busy}
+                  style={styles.confirmOkBtn}
+                  activeOpacity={0.8}
+                >
+                  {busy ? (
+                    <ActivityIndicator size="small" color={Colors.white} />
+                  ) : (
+                    <Text style={styles.confirmOkText}>
+                      {confirmAction === 'remove' ? t('friends.removeFriend') : t('friends.blockUser')}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.dangerBtnRow}>
+              <TouchableOpacity
+                onPress={confirmRemove}
+                disabled={busy}
+                style={styles.dangerBtn}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="person-remove-outline" size={16} color="#EF4444" />
+                <Text style={styles.dangerText}>{t('friends.removeFriend')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={confirmBlock}
+                disabled={busy}
+                style={styles.dangerBtn}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="ban-outline" size={16} color="#EF4444" />
+                <Text style={styles.dangerText}>{t('friends.blockUser')}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+        </Animated.View>
+      </View>
     </Modal>
   );
 }
@@ -136,11 +230,14 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.45)',
   },
-  sheet: {
+  sheetOuter: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
+    alignItems: 'center',
+  },
+  sheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
@@ -286,5 +383,75 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontWeight: '700',
     fontSize: 13,
+  },
+  dangerActions: {
+    marginTop: 14,
+  },
+  dangerBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  dangerBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#FFF5F5',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  confirmBanner: {
+    width: '100%',
+    backgroundColor: '#FFF5F5',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    padding: 14,
+    gap: 12,
+  },
+  confirmBannerText: {
+    fontSize: 13,
+    color: Colors.textDark,
+    fontWeight: '600',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  confirmBannerActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  confirmCancelBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: Colors.white,
+  },
+  confirmCancelText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textMuted,
+  },
+  confirmOkBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: '#EF4444',
+    minHeight: 42,
+  },
+  confirmOkText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Colors.white,
+  },
+  dangerText: {
+    color: '#EF4444',
+    fontWeight: '700',
+    fontSize: 12,
   },
 });

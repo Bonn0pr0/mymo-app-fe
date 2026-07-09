@@ -16,7 +16,10 @@ import type { Friend } from '../constants/data';
 import { VIBE_SPOTS } from '../constants/data';
 import FriendSheet from '../components/FriendSheet';
 import PostSheet from '../components/PostSheet';
+import PlaceSheet from '../components/PlaceSheet';
 import { getNearbyPosts, toPostView, type NearbyPost, type PostView } from '../services/postApi';
+import { filterActivePosts } from '../utils/postExpiration';
+import { getNearbyPlaces, recentPostToPostView, type PlaceSummary } from '../services/placeApi';
 import { getFriendsLocations } from '../services/friendsApi';
 import { updateUserLocation } from '../services/userApi';
 import { friendLocationToMapPin, type MapFriendPin } from '../utils/mapFriendUtils';
@@ -163,6 +166,47 @@ function createFriendMarkerEl(friend: MapFriendPin, onTap: () => void): HTMLDivE
   return el;
 }
 
+function createPlaceMarkerEl(place: PlaceSummary, onTap: () => void): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = 'display:flex; flex-direction:column; align-items:center; cursor:pointer; z-index:4;';
+
+  const iconWrap = document.createElement('div');
+  iconWrap.style.cssText = `
+    width:48px; height:48px; border-radius:14px;
+    border:3px solid #F59E0B; background:#FEF3C7;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 4px 16px rgba(245,158,11,0.45); overflow:hidden;
+  `;
+
+  if (place.thumbnailUrl) {
+    const img = document.createElement('img');
+    img.src = place.thumbnailUrl;
+    img.alt = place.name;
+    img.style.cssText = 'width:100%; height:100%; object-fit:cover; display:block;';
+    iconWrap.appendChild(img);
+  } else {
+    iconWrap.textContent = '🏪';
+    iconWrap.style.fontSize = '20px';
+  }
+
+  const nameTag = document.createElement('div');
+  nameTag.style.cssText = `
+    margin-top:4px; max-width:90px; background:rgba(255,255,255,0.95);
+    padding:3px 8px; border-radius:10px;
+    font-size:9px; font-weight:700; color:#2A1758;
+    box-shadow:0 2px 8px rgba(124,91,255,0.12);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center;
+  `;
+  nameTag.textContent = place.averageRating && place.averageRating > 0
+    ? `${place.name} ⭐${place.averageRating.toFixed(1)}`
+    : place.name;
+
+  el.appendChild(iconWrap);
+  el.appendChild(nameTag);
+  el.addEventListener('click', onTap);
+  return el;
+}
+
 function createPostMarkerEl(post: NearbyPost, onTap: () => void): HTMLDivElement {
   const el = document.createElement('div');
   el.style.cssText = 'display:flex; flex-direction:column; align-items:center; cursor:pointer; z-index:5;';
@@ -215,7 +259,9 @@ export default function MapScreen({
   const [mapTheme, setMapTheme] = useState<'purple' | 'yellow'>('purple');
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [nearbyPosts, setNearbyPosts] = useState<NearbyPost[]>([]);
+  const [nearbyPlaces, setNearbyPlaces] = useState<PlaceSummary[]>([]);
   const [selectedPost, setSelectedPost] = useState<PostView | null>(null);
+  const [selectedPlace, setSelectedPlace] = useState<PlaceSummary | null>(null);
   const [friendPins, setFriendPins] = useState<MapFriendPin[]>([]);
   const [mapReady, setMapReady] = useState(false);
 
@@ -223,6 +269,7 @@ export default function MapScreen({
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const heatMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const postMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  const placeMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const hasFittedPostsRef = useRef(false);
   const MAP_CONTAINER_ID = 'mymo-mapbox-container';
@@ -305,18 +352,46 @@ export default function MapScreen({
     const lng = userCoords?.lng ?? DEFAULT_CENTER[0];
     try {
       const posts = await getNearbyPosts(lat, lng, 5, 1, 20);
-      setNearbyPosts(posts);
+      setNearbyPosts(filterActivePosts(posts));
     } catch {
       setNearbyPosts([]);
+    }
+  }, [userCoords]);
+
+  const fetchNearbyPlaces = useCallback(async () => {
+    const lat = userCoords?.lat ?? DEFAULT_CENTER[1];
+    const lng = userCoords?.lng ?? DEFAULT_CENTER[0];
+    try {
+      const places = await getNearbyPlaces(lat, lng, 5);
+      setNearbyPlaces(places);
+    } catch {
+      setNearbyPlaces([]);
     }
   }, [userCoords]);
 
   useEffect(() => {
     if (!isActive) return;
     fetchNearbyPosts();
-    const sub = DeviceEventEmitter.addListener('post:created', fetchNearbyPosts);
+    fetchNearbyPlaces();
+    const sub = DeviceEventEmitter.addListener('post:created', () => {
+      fetchNearbyPosts();
+      fetchNearbyPlaces();
+    });
     return () => sub.remove();
-  }, [isActive, fetchNearbyPosts]);
+  }, [isActive, fetchNearbyPosts, fetchNearbyPlaces]);
+
+  const searchLower = searchText.trim().toLowerCase();
+  const filteredPosts = searchLower
+    ? nearbyPosts.filter(p =>
+        p.displayName.toLowerCase().includes(searchLower) ||
+        (p.caption || '').toLowerCase().includes(searchLower))
+    : nearbyPosts;
+  const filteredPlaces = searchLower
+    ? nearbyPlaces.filter(p =>
+        p.name.toLowerCase().includes(searchLower) ||
+        (p.address || '').toLowerCase().includes(searchLower) ||
+        (p.city || '').toLowerCase().includes(searchLower))
+    : nearbyPlaces;
 
   // ── Apply theme colors to map layers ───────────────────────────────────────
   useEffect(() => {
@@ -464,6 +539,8 @@ export default function MapScreen({
       markersRef.current = [];
       heatMarkersRef.current = [];
       postMarkersRef.current = [];
+      placeMarkersRef.current.forEach(m => m.remove());
+      placeMarkersRef.current = [];
       userMarkerRef.current = null;
       setMapReady(false);
     };
@@ -478,8 +555,11 @@ export default function MapScreen({
     postMarkersRef.current.forEach(m => m.remove());
     postMarkersRef.current = [];
 
-    nearbyPosts.forEach(post => {
-      const el = createPostMarkerEl(post, () => setSelectedPost(toPostView(post)));
+    filteredPosts.forEach(post => {
+      const el = createPostMarkerEl(post, () => {
+        setSelectedPlace(null);
+        setSelectedPost(toPostView(post));
+      });
       const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
         .setLngLat([post.longitude, post.latitude])
         .addTo(map);
@@ -502,7 +582,27 @@ export default function MapScreen({
         map.fitBounds(bounds, { padding: 80, maxZoom: DEFAULT_ZOOM, duration: 800 });
       }
     }
-  }, [nearbyPosts, mapReady, userCoords]);
+  }, [filteredPosts, nearbyPosts.length, mapReady, userCoords]);
+
+  // ── Sync place markers ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+
+    placeMarkersRef.current.forEach(m => m.remove());
+    placeMarkersRef.current = [];
+
+    filteredPlaces.forEach(place => {
+      const el = createPlaceMarkerEl(place, () => {
+        setSelectedPost(null);
+        setSelectedPlace(place);
+      });
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
+        .setLngLat([place.longitude, place.latitude])
+        .addTo(map);
+      placeMarkersRef.current.push(marker);
+    });
+  }, [filteredPlaces, mapReady]);
 
   // ── Sync friend markers ────────────────────────────────────────────────────
   useEffect(() => {
@@ -559,9 +659,10 @@ export default function MapScreen({
   const recenter = useCallback(() => {
     mapRef.current?.flyTo({ center: mapCenter, zoom: DEFAULT_ZOOM, duration: 800 });
     fetchNearbyPosts();
+    fetchNearbyPlaces();
     fetchFriendLocations();
     Toast.show({ type: 'success', text1: t('map.centered') });
-  }, [t, mapCenter, fetchNearbyPosts, fetchFriendLocations]);
+  }, [t, mapCenter, fetchNearbyPosts, fetchNearbyPlaces, fetchFriendLocations]);
 
   // ── Zoom ───────────────────────────────────────────────────────────────────
   const zoomIn  = useCallback(() => mapRef.current?.zoomIn(), []);
@@ -697,6 +798,19 @@ export default function MapScreen({
           ))}
         </ScrollView>
       </View>
+
+      {/* ── Place detail sheet ── */}
+      {selectedPlace && (
+        <PlaceSheet
+          placeId={selectedPlace.placeId}
+          placeName={selectedPlace.name}
+          onClose={() => setSelectedPlace(null)}
+          onPostTap={post => {
+            setSelectedPlace(null);
+            setSelectedPost(recentPostToPostView(post));
+          }}
+        />
+      )}
 
       {/* ── Post detail sheet ── */}
       {selectedPost && (

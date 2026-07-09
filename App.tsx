@@ -20,7 +20,9 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import CameraSheet from './src/components/CameraSheet';
 import ChatScreen from './src/components/ChatScreen';
 import AddFriendSheet from './src/components/AddFriendSheet';
+import PostSheet from './src/components/PostSheet';
 import { LocationPermSheet, EnableLocationModal } from './src/components/LocationPermSheet';
+import type { PostView } from './src/services/postApi';
 
 type Screen = 'auth' | 'app';
 type Tab = 'map' | 'friends' | 'notifications' | 'profile';
@@ -78,6 +80,7 @@ function AppInner() {
   const [chatWith, setChatWith] = useState<Friend | null>(null);
   const [addFriendOpen, setAddFriendOpen] = useState(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  const [notifPost, setNotifPost] = useState<PostView | null>(null);
 
   useEffect(() => {
     if (screen !== 'app') return;
@@ -161,6 +164,15 @@ function AppInner() {
           <NotificationsScreen
             isActive={tab === 'notifications'}
             onUnreadCountChange={setUnreadNotifCount}
+            onOpenPost={(postId) => {
+              setNotifPost({
+                postId,
+                displayName: '',
+                caption: '',
+                likeCount: 0,
+                commentCount: 0,
+              });
+            }}
           />
         )}
         {tab === 'profile' && (
@@ -221,6 +233,10 @@ function AppInner() {
       )}
 
       {addFriendOpen && <AddFriendSheet onClose={() => setAddFriendOpen(false)} />}
+
+      {notifPost && (
+        <PostSheet post={notifPost} onClose={() => setNotifPost(null)} />
+      )}
 
       {/* Friend sheet in Friends tab */}
       {tab === 'friends' && selectedFriend && (

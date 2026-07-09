@@ -13,7 +13,10 @@ import type { Friend } from '../constants/data';
 import { VIBE_SPOTS } from '../constants/data';
 import FriendSheet from '../components/FriendSheet';
 import PostSheet from '../components/PostSheet';
+import PlaceSheet from '../components/PlaceSheet';
 import { getNearbyPosts, toPostView, type NearbyPost, type PostView } from '../services/postApi';
+import { filterActivePosts } from '../utils/postExpiration';
+import { getNearbyPlaces, recentPostToPostView, type PlaceSummary } from '../services/placeApi';
 import { getFriendsLocations } from '../services/friendsApi';
 import { updateUserLocation } from '../services/userApi';
 import { friendLocationToMapPin, type MapFriendPin } from '../utils/mapFriendUtils';
@@ -144,7 +147,9 @@ export default function MapScreen({
   const [mapTheme, setMapTheme] = useState<'purple' | 'yellow'>('purple');
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [nearbyPosts, setNearbyPosts] = useState<NearbyPost[]>([]);
+  const [nearbyPlaces, setNearbyPlaces] = useState<PlaceSummary[]>([]);
   const [selectedPost, setSelectedPost] = useState<PostView | null>(null);
+  const [selectedPlace, setSelectedPlace] = useState<PlaceSummary | null>(null);
   const [friendPins, setFriendPins] = useState<MapFriendPin[]>([]);
   const cameraRef = useRef<Camera>(null);
   const hasFittedPostsRef = useRef(false);
@@ -248,18 +253,46 @@ export default function MapScreen({
     const lng = userCoords?.lng ?? DEFAULT_CENTER[0];
     try {
       const posts = await getNearbyPosts(lat, lng, 5, 1, 20);
-      setNearbyPosts(posts);
+      setNearbyPosts(filterActivePosts(posts));
     } catch {
       setNearbyPosts([]);
+    }
+  }, [userCoords]);
+
+  const fetchNearbyPlaces = useCallback(async () => {
+    const lat = userCoords?.lat ?? DEFAULT_CENTER[1];
+    const lng = userCoords?.lng ?? DEFAULT_CENTER[0];
+    try {
+      const places = await getNearbyPlaces(lat, lng, 5);
+      setNearbyPlaces(places);
+    } catch {
+      setNearbyPlaces([]);
     }
   }, [userCoords]);
 
   useEffect(() => {
     if (!isActive) return;
     fetchNearbyPosts();
-    const sub = DeviceEventEmitter.addListener('post:created', fetchNearbyPosts);
+    fetchNearbyPlaces();
+    const sub = DeviceEventEmitter.addListener('post:created', () => {
+      fetchNearbyPosts();
+      fetchNearbyPlaces();
+    });
     return () => sub.remove();
-  }, [isActive, fetchNearbyPosts]);
+  }, [isActive, fetchNearbyPosts, fetchNearbyPlaces]);
+
+  const searchLower = searchText.trim().toLowerCase();
+  const filteredPosts = searchLower
+    ? nearbyPosts.filter(p =>
+        p.displayName.toLowerCase().includes(searchLower) ||
+        (p.caption || '').toLowerCase().includes(searchLower))
+    : nearbyPosts;
+  const filteredPlaces = searchLower
+    ? nearbyPlaces.filter(p =>
+        p.name.toLowerCase().includes(searchLower) ||
+        (p.address || '').toLowerCase().includes(searchLower) ||
+        (p.city || '').toLowerCase().includes(searchLower))
+    : nearbyPlaces;
 
   useEffect(() => {
     if (nearbyPosts.length === 0 || hasFittedPostsRef.current || !cameraRef.current) return;
@@ -287,9 +320,9 @@ export default function MapScreen({
     cameraRef.current?.flyTo(mapCenter, 800);
     cameraRef.current?.zoomTo(DEFAULT_ZOOM, 800);
     fetchNearbyPosts();
-    fetchFriendLocations();
+    fetchNearbyPlaces();
     Toast.show({ type: 'success', text1: t('map.centered') });
-  }, [t, mapCenter, fetchNearbyPosts, fetchFriendLocations]);
+  }, [t, mapCenter, fetchNearbyPosts, fetchNearbyPlaces, fetchFriendLocations]);
 
   return (
     <View style={styles.container}>
@@ -384,8 +417,40 @@ export default function MapScreen({
           </MarkerView>
         ))}
 
+        {/* Nearby place pins */}
+        {filteredPlaces.map(place => (
+          <MarkerView
+            key={`place-${place.placeId}`}
+            coordinate={[place.longitude, place.latitude]}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setSelectedPost(null);
+                setSelectedPlace(place);
+              }}
+              style={styles.placePin}
+            >
+              <View style={[styles.placePinIcon, Shadows.glow as any]}>
+                {place.thumbnailUrl ? (
+                  <Image source={{ uri: place.thumbnailUrl }} style={styles.placePinImg} />
+                ) : (
+                  <Ionicons name="storefront" size={20} color="#F59E0B" />
+                )}
+              </View>
+              <View style={styles.placeNameTag}>
+                <Text style={styles.placePinName} numberOfLines={1}>{place.name}</Text>
+                {place.averageRating != null && place.averageRating > 0 && (
+                  <Text style={styles.placePinRating}>⭐ {place.averageRating.toFixed(1)}</Text>
+                )}
+              </View>
+            </TouchableOpacity>
+          </MarkerView>
+        ))}
+
         {/* Nearby post pins */}
-        {nearbyPosts.map(post => (
+        {filteredPosts.map(post => (
           <MarkerView
             key={`post-${post.postId}`}
             coordinate={[post.longitude, post.latitude]}
@@ -394,6 +459,7 @@ export default function MapScreen({
             <TouchableOpacity
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setSelectedPlace(null);
                 setSelectedPost(toPostView(post));
               }}
               style={styles.postPin}
@@ -579,6 +645,19 @@ export default function MapScreen({
         </ScrollView>
       </View>
 
+      {/* ── Place detail sheet ── */}
+      {selectedPlace && (
+        <PlaceSheet
+          placeId={selectedPlace.placeId}
+          placeName={selectedPlace.name}
+          onClose={() => setSelectedPlace(null)}
+          onPostTap={post => {
+            setSelectedPlace(null);
+            setSelectedPost(recentPostToPostView(post));
+          }}
+        />
+      )}
+
       {/* ── Post detail sheet ── */}
       {selectedPost && (
         <PostSheet
@@ -710,6 +789,47 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.textDark,
     textAlign: 'center',
+  },
+
+  // ── Place pins ──
+  placePin: {
+    alignItems: 'center',
+  },
+  placePinIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 3,
+    borderColor: '#F59E0B',
+    backgroundColor: '#FEF3C7',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  placePinImg: {
+    width: '100%',
+    height: '100%',
+  },
+  placeNameTag: {
+    marginTop: 4,
+    maxWidth: 90,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    alignItems: 'center',
+    ...Shadows.soft,
+  },
+  placePinName: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: Colors.textDark,
+    textAlign: 'center',
+  },
+  placePinRating: {
+    fontSize: 8,
+    color: Colors.textMuted,
+    marginTop: 1,
   },
 
   // ── Ghost / incognito pin ──

@@ -1,18 +1,15 @@
 /**
  * FriendsScreen.tsx
- * Redesigned to look exactly like the Facebook Messenger chats screen.
- * Features a horizontal story tray, status rings, user story posting,
- * search filtering, and interactive full-screen story viewing.
+ * Messenger-style friends list with search, requests, and chat shortcuts.
  */
 import React, { useState, useEffect } from 'react';
 import { DeviceEventEmitter } from 'react-native';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  FlatList, ScrollView, Image, Modal, Dimensions, SafeAreaView, Platform,
+  FlatList, Image, Platform,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors, Gradients, Shadows } from '../constants/colors';
+import { Colors } from '../constants/colors';
 import { useI18n } from '../i18n';
 import type { Friend } from '../constants/data';
 import {
@@ -23,39 +20,23 @@ import {
   requestFriend,
   acceptFriend,
   rejectFriend,
+  cancelFriendRequest,
+  removeFriend,
+  blockFriend,
+  searchFriends,
   type FriendSummary,
   type PendingFriendRequest,
+  type SentFriendRequest,
 } from '../services/friendsApi';
 import FriendMomentsSection from '../components/FriendMomentsSection';
 import FriendRequestsSection from '../components/FriendRequestsSection';
+import SentRequestsSection from '../components/SentRequestsSection';
+import FriendSuggestionsSection from '../components/FriendSuggestionsSection';
+import BlockedUsersSheet from '../components/BlockedUsersSheet';
+import FriendActionsSheet from '../components/FriendActionsSheet';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-const { width: SW, height: SH } = Dimensions.get('window');
-
-// ─── Extended Mock Data for Messenger UI ─────────────────────────────────────
-const MOCK_AVATARS: { [id: string]: string } = {
-  '1': 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop', // Léa
-  '2': 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&h=150&fit=crop', // Noah
-  '3': 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150&h=150&fit=crop', // Maya
-  '4': 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&h=150&fit=crop', // Kai
-  '5': 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&h=150&fit=crop', // Zoe
-};
-
-const MOCK_STORIES: { [id: string]: string } = {
-  '1': 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=600&fit=crop', // Beach sunset
-  '2': 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600&fit=crop', // Mountains
-  '4': 'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=600&fit=crop', // Forest
-};
-
-const MOCK_CHAT_DETAILS: { [id: string]: { message: string; time: string } } = {
-  '1': { message: 'How are you doing?', time: '1:00 pm' },
-  '2': { message: 'Long time no see!!', time: '12:00 am' },
-  '3': { message: 'Glad to know you in person!', time: '3:30 pm' },
-  '4': { message: 'I\'m doing fine and how about you?', time: 'Yesterday' },
-  '5': { message: 'What is your real name?', time: 'Monday' },
-};
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 interface FriendsScreenProps {
@@ -64,12 +45,7 @@ interface FriendsScreenProps {
   onAdd: () => void;
 }
 
-interface Story {
-  friendId: string;
-  name: string;
-  avatar: string;
-  storyImg: string;
-}
+type FriendView = Friend & { avatar: string; lastMsg: string; lastTime: string };
 
 export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScreenProps) {
   const { t } = useI18n();
@@ -78,21 +54,11 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
   const [friends, setFriends] = useState<FriendSummary[]>([]);
   const [suggestions, setSuggestions] = useState<FriendSummary[]>([]);
   const [friendRequests, setFriendRequests] = useState<PendingFriendRequest[]>([]);
-  const [sentRequests, setSentRequests] = useState<FriendSummary[]>([]);
+  const [sentRequests, setSentRequests] = useState<SentFriendRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Story state
-  const [myStory, setMyStory] = useState<string | null>(null);
-  const [selectedStory, setSelectedStory] = useState<Story | null>(null);
-  const [storyTimer, setStoryTimer] = useState<number>(0);
-  const [activeStoryIndex, setActiveStoryIndex] = useState(0);
-
-  // New Story Creation Modal State
-  const [isCreateStoryOpen, setIsCreateStoryOpen] = useState(false);
-  const [newStoryText, setNewStoryText] = useState('');
-  const [storyBgGrad, setStoryBgGrad] = useState(0);
-
-  type FriendView = Friend & { avatar: string; lastMsg: string; lastTime: string; hasStory: boolean; storyImg: string };
+  const [blockedOpen, setBlockedOpen] = useState(false);
+  const [actionFriend, setActionFriend] = useState<FriendView | null>(null);
+  const [searchResults, setSearchResults] = useState<FriendView[] | null>(null);
 
   const mapFriendSummary = (item: FriendSummary): FriendView => {
     const name = item.displayName || item.username;
@@ -116,8 +82,6 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
       avatar,
       lastMsg: item.requestedAt ? 'Request pending' : 'Say hello',
       lastTime: item.requestedAt ? new Date(item.requestedAt).toLocaleDateString() : 'Now',
-      hasStory: false,
-      storyImg: '',
     };
   };
 
@@ -132,72 +96,23 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
   const filteredFriends = friendsWithStatus.filter(f =>
     f.name.toLowerCase().includes(query.toLowerCase())
   );
+  const displayFriends = searchResults ?? filteredFriends;
 
-  // Get list of friends who have active stories
-  const activeStories: Story[] = [];
-  
-  // If user has posted their own story
-  if (myStory) {
-    activeStories.push({
-      friendId: 'me',
-      name: 'Your Story',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop',
-      storyImg: myStory,
-    });
-  }
-
-  friendsWithStatus.forEach(f => {
-    if (f.hasStory) {
-      activeStories.push({
-        friendId: f.id,
-        name: f.name,
-        avatar: f.avatar,
-        storyImg: f.storyImg,
-      });
-    }
-  });
-
-  // Story Autoplay logic
   useEffect(() => {
-    let interval: any;
-    if (selectedStory) {
-      setStoryTimer(0);
-      interval = setInterval(() => {
-        setStoryTimer(prev => {
-          if (prev >= 1) {
-            // Next story or close
-            const nextIdx = activeStoryIndex + 1;
-            if (nextIdx < activeStories.length) {
-              setActiveStoryIndex(nextIdx);
-              setSelectedStory(activeStories[nextIdx]);
-            } else {
-              setSelectedStory(null);
-            }
-            return 0;
-          }
-          return prev + 0.02; // Progress step
-        });
-      }, 100);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [selectedStory, activeStoryIndex, activeStories.length]);
-
-  const handlePostStory = () => {
-    if (!newStoryText.trim()) {
-      Toast.show({ type: 'error', text1: 'Vui lòng nhập nội dung story!' });
+    if (!query.trim()) {
+      setSearchResults(null);
       return;
     }
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    
-    // We render a colored canvas or generate a text story image placeholder
-    // For simplicity, we create a colorful dynamic status story placeholder
-    setMyStory(`text-story:${newStoryText}:${storyBgGrad}`);
-    setNewStoryText('');
-    setIsCreateStoryOpen(false);
-    Toast.show({ type: 'success', text1: 'Đã đăng story thành công! ✨' });
-  };
+    const timer = setTimeout(async () => {
+      try {
+        const res = await searchFriends(query.trim());
+        setSearchResults(res.map(mapFriendSummary));
+      } catch {
+        setSearchResults([]);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
 
   const fetchFriendData = async () => {
     setIsLoading(true);
@@ -260,12 +175,31 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
     }
   };
 
-  const grads = [
-    ['#9C7CFF', '#7C5BFF'], // Purple
-    ['#FF8FB8', '#FF3D6E'], // Warm pink
-    ['#7CC4FF', '#3B82F6'], // Ocean blue
-    ['#FBBF24', '#EF4444'], // Sunset yellow
-  ];
+  const handleCancelSent = async (request: SentFriendRequest) => {
+    try {
+      await cancelFriendRequest(request.userId);
+      setSentRequests(prev => prev.filter(r => r.userId !== request.userId));
+      Toast.show({ type: 'info', text1: `${t('friends.cancelRequest')} ${request.displayName}` });
+    } catch (error) {
+      Toast.show({ type: 'error', text1: String(error instanceof Error ? error.message : 'Unable to cancel') });
+    }
+  };
+
+  const handleAddSuggestion = async (user: FriendSummary) => {
+    try {
+      await requestFriend(user.userId);
+      setSuggestions(prev => prev.filter(s => s.userId !== user.userId));
+      DeviceEventEmitter.emit('friend:requested', { userId: user.userId });
+      await fetchFriendData();
+      Toast.show({ type: 'success', text1: `${t('addFriend.sent')} ${user.displayName}` });
+    } catch (error) {
+      Toast.show({ type: 'error', text1: String(error instanceof Error ? error.message : 'Unable to send request') });
+    }
+  };
+
+  const showFriendActions = (friend: FriendView) => {
+    setActionFriend(friend);
+  };
 
   return (
     <View style={styles.container}>
@@ -276,11 +210,15 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
           source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop' }}
           style={styles.headerAvatar}
         />
-        <Text style={styles.headerTitle}>Chats</Text>
-        {/* Compose/Add friend button on the right */}
-        <TouchableOpacity onPress={onAdd} style={styles.headerBtn} activeOpacity={0.8}>
-          <Ionicons name="create" size={20} color={Colors.textDark} />
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{t('friends.title')}</Text>
+        <View style={styles.headerActions}>
+          <TouchableOpacity onPress={() => setBlockedOpen(true)} style={styles.headerBtn} activeOpacity={0.8}>
+            <Ionicons name="ban-outline" size={20} color={Colors.textDark} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onAdd} style={styles.headerBtn} activeOpacity={0.8}>
+            <Ionicons name="person-add-outline" size={20} color={Colors.textDark} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* ── Search Bar ── */}
@@ -289,7 +227,7 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder="Search"
+          placeholder={t('friends.search')}
           placeholderTextColor={Colors.textMuted}
           style={styles.searchInput}
         />
@@ -302,7 +240,7 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
 
       {/* ── Main List ── */}
       <FlatList
-        data={filteredFriends}
+        data={displayFriends}
         keyExtractor={f => f.id}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
@@ -313,226 +251,81 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
               onAccept={handleAcceptRequest}
               onReject={handleRejectRequest}
             />
-            <View style={styles.storyTrayWrap}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyTray}>
-              {/* Add Story Button (Your Story) */}
-              <View style={styles.storyCol}>
-                <TouchableOpacity
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    if (myStory) {
-                      // View my story
-                      setActiveStoryIndex(0);
-                      setSelectedStory(activeStories[0]);
-                    } else {
-                      setIsCreateStoryOpen(true);
-                    }
-                  }}
-                  style={[
-                    styles.storyAvatarWrap,
-                    myStory && styles.storyRingActive
-                  ]}
-                  activeOpacity={0.85}
-                >
-                  {myStory ? (
-                    <Image
-                      source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop' }}
-                      style={styles.storyAvatar}
-                    />
-                  ) : (
-                    <View style={styles.createStoryBtn}>
-                      <Ionicons name="add" size={24} color={Colors.textDark} />
-                    </View>
-                  )}
-                </TouchableOpacity>
-                <Text style={styles.storyName}>Your Story</Text>
-              </View>
-
-              {/* Friends Stories */}
-              {friendsWithStatus.map(f => {
-                if (!f.hasStory) return null;
-                const storyIdx = activeStories.findIndex(s => s.friendId === f.id);
-                return (
-                  <View key={`story-${f.id}`} style={styles.storyCol}>
-                    <TouchableOpacity
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setActiveStoryIndex(storyIdx);
-                        setSelectedStory(activeStories[storyIdx]);
-                      }}
-                      style={[styles.storyAvatarWrap, styles.storyRingActive]}
-                      activeOpacity={0.85}
-                    >
-                      <Image source={{ uri: f.avatar }} style={styles.storyAvatar} />
-                      {f.status === 'active' && <View style={styles.storyActiveDot} />}
-                    </TouchableOpacity>
-                    <Text style={styles.storyName} numberOfLines={1}>
-                      {f.name.split(' ')[0]}
-                    </Text>
-                  </View>
-                );
-              })}
-            </ScrollView>
-            </View>
+            <SentRequestsSection
+              requests={sentRequests}
+              onCancel={handleCancelSent}
+            />
+            <FriendSuggestionsSection
+              suggestions={suggestions}
+              onAdd={handleAddSuggestion}
+            />
             <FriendMomentsSection friendNames={friendLookup} />
           </View>
         )}
         renderItem={({ item: f }) => (
-          <TouchableOpacity
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onChat(f);
-            }}
-            onLongPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              onFriendTap(f);
-            }}
-            style={styles.chatItem}
-            activeOpacity={0.7}
-          >
-            {/* Left side: Avatar wrapped in story ring (if they have a story) */}
-            <View style={styles.chatAvatarWrap}>
-              <TouchableOpacity
-                onPress={() => {
-                  if (f.hasStory) {
-                    const storyIdx = activeStories.findIndex(s => s.friendId === f.id);
-                    setActiveStoryIndex(storyIdx);
-                    setSelectedStory(activeStories[storyIdx]);
-                  } else {
-                    onChat(f);
-                  }
-                }}
-                disabled={!f.hasStory}
-                activeOpacity={0.8}
-                style={[
-                  styles.avatarBorder,
-                  f.hasStory && styles.storyRingActive
-                ]}
-              >
+          <View style={styles.chatItem}>
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onChat(f);
+              }}
+              onLongPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                showFriendActions(f);
+              }}
+              style={styles.chatItemMain}
+              activeOpacity={0.7}
+            >
+              <View style={styles.chatAvatarWrap}>
                 <Image source={{ uri: f.avatar }} style={styles.chatAvatar} />
-              </TouchableOpacity>
-              {f.status === 'active' && <View style={styles.chatActiveDot} />}
-            </View>
+                {f.status === 'active' && <View style={styles.chatActiveDot} />}
+              </View>
 
-            {/* Middle: Name + message snippet */}
-            <View style={styles.chatInfo}>
-              <Text style={styles.chatName}>{f.name}</Text>
-              <Text style={styles.chatMsg} numberOfLines={1}>
-                {f.lastMsg} · {f.lastTime}
-              </Text>
-            </View>
-          </TouchableOpacity>
+              <View style={styles.chatInfo}>
+                <Text style={styles.chatName}>{f.name}</Text>
+                <Text style={styles.chatMsg} numberOfLines={1}>
+                  {f.lastMsg} · {f.lastTime}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => showFriendActions(f)}
+              style={styles.chatMoreBtn}
+              activeOpacity={0.7}
+              accessibilityLabel={t('friends.manageFriend')}
+            >
+              <Ionicons name="ellipsis-vertical" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+          </View>
         )}
       />
 
-      {/* ── Fullscreen Story Viewer Modal ── */}
-      <Modal visible={!!selectedStory} transparent animationType="fade" onRequestClose={() => setSelectedStory(null)}>
-        {selectedStory && (
-          <SafeAreaView style={styles.storyModal}>
-            {/* Background tap handlers */}
-            <View style={StyleSheet.absoluteFill}>
-              {selectedStory.storyImg.startsWith('text-story:') ? (
-                <LinearGradient
-                  colors={grads[parseInt(selectedStory.storyImg.split(':')[2]) || 0] as any}
-                  style={StyleSheet.absoluteFill}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                >
-                  <View style={styles.storyTextContentWrap}>
-                    <Text style={styles.storyTextContent}>{selectedStory.storyImg.split(':')[1]}</Text>
-                  </View>
-                </LinearGradient>
-              ) : (
-                <Image source={{ uri: selectedStory.storyImg }} style={styles.storyFullImage} resizeMode="cover" />
-              )}
-            </View>
+      <BlockedUsersSheet
+        visible={blockedOpen}
+        onClose={() => setBlockedOpen(false)}
+        onChanged={fetchFriendData}
+      />
 
-            {/* Story header controls & progress bar */}
-            <View style={styles.storyModalHeader}>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${storyTimer * 100}%` }]} />
-              </View>
-              <View style={styles.storyUserRow}>
-                <Image source={{ uri: selectedStory.avatar }} style={styles.storyUserAvatar} />
-                <Text style={styles.storyUserName}>{selectedStory.name}</Text>
-                <TouchableOpacity onPress={() => setSelectedStory(null)} style={styles.storyCloseBtn}>
-                  <Ionicons name="close" size={24} color="#FFF" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Bottom reply box */}
-            <View style={styles.storyReplyRow}>
-              <TextInput
-                placeholder="Send message..."
-                placeholderTextColor="rgba(255,255,255,0.7)"
-                style={styles.storyReplyInput}
-              />
-              <TouchableOpacity onPress={() => {
-                Toast.show({ type: 'success', text1: 'Đã gửi phản hồi!' });
-                setSelectedStory(null);
-              }}>
-                <Ionicons name="send" size={20} color="#FFF" />
-              </TouchableOpacity>
-            </View>
-          </SafeAreaView>
-        )}
-      </Modal>
-
-      {/* ── Create Story Modal ── */}
-      <Modal visible={isCreateStoryOpen} transparent animationType="slide" onRequestClose={() => setIsCreateStoryOpen(false)}>
-        <View style={styles.createStoryModal}>
-          <View style={styles.createStoryCard}>
-            <View style={styles.createStoryHeader}>
-              <Text style={styles.createStoryTitle}>Đăng Story mới</Text>
-              <TouchableOpacity onPress={() => setIsCreateStoryOpen(false)}>
-                <Ionicons name="close-circle" size={24} color={Colors.textMuted} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Colored background selector preview */}
-            <LinearGradient
-              colors={grads[storyBgGrad] as any}
-              style={styles.createStoryPreview}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-            >
-              <TextInput
-                value={newStoryText}
-                onChangeText={setNewStoryText}
-                placeholder="Nhập suy nghĩ của bạn hôm nay..."
-                placeholderTextColor="rgba(255,255,255,0.8)"
-                multiline
-                maxLength={80}
-                style={styles.createStoryInput}
-              />
-            </LinearGradient>
-
-            {/* Gradient Selector dots */}
-            <View style={styles.gradRow}>
-              {grads.map((g, i) => (
-                <TouchableOpacity
-                  key={`grad-${i}`}
-                  onPress={() => setStoryBgGrad(i)}
-                  style={[
-                    styles.gradDot,
-                    storyBgGrad === i && styles.gradDotActive
-                  ]}
-                >
-                  <LinearGradient colors={g as any} style={styles.gradDotFill} />
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Action buttons */}
-            <TouchableOpacity onPress={handlePostStory} style={styles.postStoryBtn}>
-              <LinearGradient colors={(Gradients.primary as any)} style={styles.postStoryBtnGrad}>
-                <Text style={styles.postStoryBtnText}>Đăng Story 🚀</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <FriendActionsSheet
+        visible={!!actionFriend}
+        friendName={actionFriend?.name || ''}
+        onClose={() => setActionFriend(null)}
+        onRemove={async () => {
+          if (!actionFriend) return;
+          await removeFriend(actionFriend.id);
+          DeviceEventEmitter.emit('friends:refetch');
+          await fetchFriendData();
+          Toast.show({ type: 'success', text1: `${t('friends.removed')} ${actionFriend.name}` });
+        }}
+        onBlock={async () => {
+          if (!actionFriend) return;
+          await blockFriend(actionFriend.id);
+          DeviceEventEmitter.emit('friends:refetch');
+          await fetchFriendData();
+          Toast.show({ type: 'info', text1: `${t('friends.blocked')} ${actionFriend.name}` });
+        }}
+      />
     </View>
   );
 }
@@ -571,6 +364,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '800',
     color: Colors.textDark,
+    flex: 1,
+    textAlign: 'center',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
   },
   headerBtn: {
     width: 38,
@@ -600,86 +399,34 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
 
-  // ── Story tray ──
-  storyTrayWrap: {
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
-    marginBottom: 8,
-  },
-  storyTray: {
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  storyCol: {
-    alignItems: 'center',
-    width: 68,
-  },
-  storyAvatarWrap: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    borderWidth: 2,
-    borderColor: 'transparent',
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  storyRingActive: {
-    borderColor: '#3B82F6', // Blue story border
-  },
-  storyAvatar: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#EEE',
-  },
-  storyActiveDot: {
-    position: 'absolute',
-    bottom: 2,
-    right: 2,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: Colors.white,
-  },
-  createStoryBtn: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#F0F0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  storyName: {
-    fontSize: 11,
-    color: Colors.textDark,
-    textAlign: 'center',
-    marginTop: 4,
-    fontWeight: '500',
-  },
-
   // ── Chat items list ──
   chatItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
-  chatAvatarWrap: {
-    position: 'relative',
+  chatItemMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minWidth: 0,
   },
-  avatarBorder: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    borderWidth: 2.5,
-    borderColor: 'transparent',
+  chatMoreBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
+    marginLeft: 4,
+    ...Platform.select({
+      web: { cursor: 'pointer' as const },
+      default: {},
+    }),
+  },
+  chatAvatarWrap: {
+    position: 'relative',
   },
   chatAvatar: {
     width: 50,
@@ -711,160 +458,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textMuted,
     marginTop: 3,
-  },
-
-  // ── Story view modal ──
-  storyModal: {
-    flex: 1,
-    backgroundColor: '#000',
-    justifyContent: 'space-between',
-  },
-  storyFullImage: {
-    ...StyleSheet.absoluteFill,
-  },
-  storyTextContentWrap: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-  },
-  storyTextContent: {
-    fontSize: 24,
-    color: '#FFF',
-    fontWeight: '800',
-    textAlign: 'center',
-    lineHeight: 34,
-  },
-  storyModalHeader: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 10,
-  },
-  progressBarBg: {
-    width: '100%',
-    height: 3,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#FFF',
-  },
-  storyUserRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  storyUserAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#FFF',
-  },
-  storyUserName: {
-    flex: 1,
-    color: '#FFF',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  storyCloseBtn: {
-    padding: 4,
-  },
-  storyReplyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingBottom: 24,
-    paddingTop: 12,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  storyReplyInput: {
-    flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    color: '#FFF',
-    fontSize: 14,
-  },
-
-  // ── Create story modal ──
-  createStoryModal: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  createStoryCard: {
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 20,
-    gap: 16,
-  },
-  createStoryHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  createStoryTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: Colors.textDark,
-  },
-  createStoryPreview: {
-    width: '100%',
-    height: 180,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 16,
-  },
-  createStoryInput: {
-    width: '100%',
-    textAlign: 'center',
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  gradRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
-    marginTop: 4,
-  },
-  gradDot: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: 'transparent',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  gradDotActive: {
-    borderColor: Colors.primary,
-  },
-  gradDotFill: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-  },
-  postStoryBtn: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    marginTop: 8,
-    ...Shadows.glow,
-  },
-  postStoryBtnGrad: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  postStoryBtnText: {
-    color: Colors.white,
-    fontWeight: '700',
-    fontSize: 15,
   },
 });

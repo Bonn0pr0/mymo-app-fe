@@ -1,8 +1,8 @@
 /**
  * NotificationsScreen.tsx
- * Friend request notifications with accept/reject actions.
+ * Friend request, like, and comment notifications.
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
   FlatList, RefreshControl, Image, Platform, DeviceEventEmitter,
@@ -21,10 +21,12 @@ import {
   getNotifications,
   getUnreadCount,
   markAsRead,
-  markAllRead,
+  clearAllNotifications,
   deleteNotification,
   type NotificationItem,
+  type NotificationSender,
 } from '../services/notificationsApi';
+import { groupNotifications } from '../utils/notificationGrouping';
 import FriendRequestsSection from '../components/FriendRequestsSection';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
@@ -34,31 +36,56 @@ type NotifFilter = 'all' | 'requests' | 'likes';
 
 interface ScreenItem {
   id: string;
-  type: 'request' | 'friend_accepted' | 'friend_rejected' | 'like' | 'info';
+  type: 'request' | 'friend_accepted' | 'friend_rejected' | 'like' | 'comment' | 'info';
   who: string;
   textKey: string;
+  body?: string;
   time: string;
   avatarUrl?: string | null;
+  senders?: NotificationSender[];
+  isGrouped?: boolean;
+  count?: number;
   requesterId?: string;
   notificationId?: string;
+  groupIds?: string[];
+  postId?: string | null;
+  isRead?: boolean;
 }
 
 interface NotificationsScreenProps {
   isActive?: boolean;
   onUnreadCountChange?: (count: number) => void;
+  onOpenPost?: (postId: string) => void;
+}
+
+function isActivityType(type: ScreenItem['type']): boolean {
+  return type === 'like' || type === 'comment';
+}
+
+function getRequesterId(nt: NotificationItem): string | undefined {
+  return nt.referenceId || nt.senderId;
+}
+
+function isFriendRequestNotification(nt: NotificationItem, requesterId: string): boolean {
+  if (nt.type !== 'request') return false;
+  const rid = getRequesterId(nt);
+  return rid === requesterId;
 }
 
 export default function NotificationsScreen({
   isActive = true,
   onUnreadCountChange,
+  onOpenPost,
 }: NotificationsScreenProps) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const insets = useSafeAreaInsets();
 
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState<NotifFilter>('all');
   const [friendRequests, setFriendRequests] = useState<PendingFriendRequest[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [handledRequesterIds, setHandledRequesterIds] = useState<Set<string>>(new Set());
+  const [clearing, setClearing] = useState(false);
 
   const fetchRequests = useCallback(async () => {
     try {
@@ -90,10 +117,14 @@ export default function NotificationsScreen({
     const sub1 = DeviceEventEmitter.addListener('friend:requested', refreshAll);
     const sub2 = DeviceEventEmitter.addListener('friend:accepted', refreshAll);
     const sub3 = DeviceEventEmitter.addListener('friends:refetch', refreshAll);
+    const sub4 = DeviceEventEmitter.addListener('post:liked', refreshAll);
+    const sub5 = DeviceEventEmitter.addListener('post:commented', refreshAll);
     return () => {
       sub1.remove();
       sub2.remove();
       sub3.remove();
+      sub4.remove();
+      sub5.remove();
     };
   }, [refreshAll]);
 
@@ -109,19 +140,35 @@ export default function NotificationsScreen({
     refreshAll().finally(() => setRefreshing(false));
   };
 
+  const dismissFriendRequestNotifications = useCallback(async (requesterId: string) => {
+    setHandledRequesterIds(prev => new Set(prev).add(requesterId));
+    setNotifications(prev => prev.filter(n => !isFriendRequestNotification(n, requesterId)));
+
+    const matching = notifications.filter(n => isFriendRequestNotification(n, requesterId));
+    await Promise.all(
+      matching.map(n => deleteNotification(n.id).catch(() => false)),
+    );
+  }, [notifications]);
+
   const handleAccept = async (requesterId: string, displayName: string, notificationId?: string) => {
     try {
       await acceptFriend(requesterId);
       setFriendRequests(prev => prev.filter(r => r.userId !== requesterId));
+      await dismissFriendRequestNotifications(requesterId);
       if (notificationId) {
-        try { await markAsRead(notificationId); } catch { /* ignore */ }
-        setNotifications(prev => prev.filter(n => n.id !== notificationId));
+        try { await deleteNotification(notificationId); } catch { /* ignore */ }
       }
       DeviceEventEmitter.emit('friend:accepted', { userId: requesterId });
       DeviceEventEmitter.emit('friends:refetch');
       Toast.show({ type: 'success', text1: `${displayName} ${t('friends.nowFriend')}` });
-      await fetchNotifications();
+      const uc = await getUnreadCount().catch(() => 0);
+      onUnreadCountChange?.(uc);
     } catch (err) {
+      setHandledRequesterIds(prev => {
+        const next = new Set(prev);
+        next.delete(requesterId);
+        return next;
+      });
       Toast.show({ type: 'error', text1: String(err instanceof Error ? err.message : 'Unable to accept') });
     }
   };
@@ -130,41 +177,83 @@ export default function NotificationsScreen({
     try {
       await rejectFriend(requesterId);
       setFriendRequests(prev => prev.filter(r => r.userId !== requesterId));
+      await dismissFriendRequestNotifications(requesterId);
       if (notificationId) {
         try { await deleteNotification(notificationId); } catch { /* ignore */ }
-        setNotifications(prev => prev.filter(n => n.id !== notificationId));
       }
       Toast.show({ type: 'info', text1: `${t('friends.dismissed')} ${displayName}` });
-      await fetchNotifications();
+      const uc = await getUnreadCount().catch(() => 0);
+      onUnreadCountChange?.(uc);
     } catch (err) {
+      setHandledRequesterIds(prev => {
+        const next = new Set(prev);
+        next.delete(requesterId);
+        return next;
+      });
       Toast.show({ type: 'error', text1: String(err instanceof Error ? err.message : 'Unable to reject') });
     }
   };
 
+  const handleOpenPost = async (item: ScreenItem) => {
+    if (!item.postId || !onOpenPost) return;
+
+    const idsToMark = item.groupIds?.length ? item.groupIds : (item.notificationId ? [item.notificationId] : []);
+    const hasUnread = !item.isRead;
+
+    if (hasUnread && idsToMark.length > 0) {
+      await Promise.all(idsToMark.map(id => markAsRead(id).catch(() => false)));
+      setNotifications(prev =>
+        prev.map(n => (idsToMark.includes(n.id) ? { ...n, isRead: true } : n)),
+      );
+      const uc = await getUnreadCount().catch(() => 0);
+      onUnreadCountChange?.(uc);
+    }
+
+    onOpenPost(item.postId);
+  };
+
   const requestIds = new Set(friendRequests.map(r => r.userId));
 
-  const notificationItems: ScreenItem[] = notifications
+  const groupedNotifications = useMemo(
+    () => groupNotifications(notifications, lang),
+    [notifications, lang],
+  );
+
+  const notificationItems: ScreenItem[] = groupedNotifications
     .filter(nt => {
       if (nt.type === 'request') {
-        const requesterId = nt.referenceId || nt.senderId;
-        return !requestIds.has(requesterId || '');
+        const requesterId = getRequesterId(nt);
+        if (!requesterId || handledRequesterIds.has(requesterId)) return false;
+        return !requestIds.has(requesterId);
       }
       return true;
     })
     .map(nt => ({
       id: nt.id,
       type: nt.type as ScreenItem['type'],
-      who: nt.title || t('friends.someone'),
+      who: nt.senderName || nt.title || t('friends.someone'),
       textKey: nt.type === 'friend_accepted'
         ? 'notif.text.accepted'
         : nt.type === 'friend_rejected'
         ? 'notif.text.rejected'
         : nt.type === 'request'
         ? 'notif.text.request'
+        : nt.type === 'like'
+        ? 'notif.text.like'
+        : nt.type === 'comment'
+        ? 'notif.text.comment'
         : 'notif.text.generic',
+      body: nt.body,
       time: nt.createdAt ? new Date(nt.createdAt).toLocaleString() : t('common.now'),
+      avatarUrl: nt.avatarUrl,
+      senders: nt.senders,
+      isGrouped: nt.isGrouped,
+      count: nt.count,
       requesterId: nt.referenceId || nt.senderId,
       notificationId: nt.id,
+      groupIds: nt.groupIds,
+      postId: nt.postId,
+      isRead: nt.isRead,
     }));
 
   const allItems = [...notificationItems];
@@ -173,16 +262,31 @@ export default function NotificationsScreen({
     if (activeFilter === 'requests') {
       return friendRequests.length > 0 || n.type === 'request' || n.type === 'friend_accepted' || n.type === 'friend_rejected';
     }
-    if (activeFilter === 'likes') return n.type === 'like';
+    if (activeFilter === 'likes') return isActivityType(n.type);
     return true;
   });
 
   const clearAll = async () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    try { await markAllRead(); } catch { /* ignore */ }
-    setNotifications([]);
-    Toast.show({ type: 'success', text1: t('notif.allDone') });
-    onUnreadCountChange?.(0);
+    if (clearing || allItems.length === 0) return;
+
+    setClearing(true);
+    try {
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      }
+      await clearAllNotifications();
+      setNotifications([]);
+      setHandledRequesterIds(new Set());
+      onUnreadCountChange?.(0);
+      Toast.show({ type: 'success', text1: t('notif.allDone') });
+    } catch (err) {
+      Toast.show({
+        type: 'error',
+        text1: String(err instanceof Error ? err.message : 'Unable to clear notifications'),
+      });
+    } finally {
+      setClearing(false);
+    }
   };
 
   return (
@@ -193,8 +297,14 @@ export default function NotificationsScreen({
           <Text style={styles.subtitle}>{t('notif.subtitle')}</Text>
         </View>
         {allItems.length > 0 && (
-          <TouchableOpacity onPress={clearAll} style={styles.clearBtn} activeOpacity={0.8}>
-            <Text style={styles.clearText}>{t('common.clear')}</Text>
+          <TouchableOpacity
+            onPress={clearAll}
+            disabled={clearing}
+            style={[styles.clearBtn, clearing && styles.clearBtnDisabled]}
+            activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={styles.clearText}>{clearing ? '...' : t('common.clear')}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -207,7 +317,7 @@ export default function NotificationsScreen({
               n.type === 'request' || n.type === 'friend_accepted' || n.type === 'friend_rejected'
             ).length
             : allItems.filter(n => {
-              if (filter === 'likes') return n.type === 'like';
+              if (filter === 'likes') return isActivityType(n.type);
               return true;
             }).length);
 
@@ -223,12 +333,12 @@ export default function NotificationsScreen({
               {isActiveTab ? (
                 <LinearGradient colors={Gradients.primary as any} style={styles.filterTabGrad}>
                   <Text style={styles.filterTabTextActive}>
-                    {filter === 'all' ? 'Tất cả' : filter === 'requests' ? 'Yêu cầu' : 'Yêu thích'} ({count})
+                    {filter === 'all' ? 'Tất cả' : filter === 'requests' ? 'Yêu cầu' : 'Tương tác'} ({count})
                   </Text>
                 </LinearGradient>
               ) : (
                 <Text style={styles.filterTabText}>
-                  {filter === 'all' ? 'Tất cả' : filter === 'requests' ? 'Yêu cầu' : 'Yêu thích'}
+                  {filter === 'all' ? 'Tất cả' : filter === 'requests' ? 'Yêu cầu' : 'Tương tác'}
                 </Text>
               )}
             </TouchableOpacity>
@@ -240,8 +350,14 @@ export default function NotificationsScreen({
         <FriendRequestsSection
           requests={friendRequests}
           compact
-          onAccept={(request) => handleAccept(request.userId, request.displayName)}
-          onReject={(request) => handleReject(request.userId, request.displayName)}
+          onAccept={(request) => {
+            const notif = notifications.find(n => isFriendRequestNotification(n, request.userId));
+            handleAccept(request.userId, request.displayName, notif?.id);
+          }}
+          onReject={(request) => {
+            const notif = notifications.find(n => isFriendRequestNotification(n, request.userId));
+            handleReject(request.userId, request.displayName, notif?.id);
+          }}
         />
       )}
 
@@ -263,6 +379,9 @@ export default function NotificationsScreen({
         renderItem={({ item }) => (
           <NotifItem
             item={item}
+            onPress={() => {
+              if (isActivityType(item.type)) handleOpenPost(item);
+            }}
             onAccept={() => {
               if (!item.requesterId) return;
               handleAccept(item.requesterId, item.who, item.notificationId);
@@ -280,33 +399,71 @@ export default function NotificationsScreen({
 
 function NotifItem({
   item,
+  onPress,
   onAccept,
   onReject,
 }: {
   item: ScreenItem;
+  onPress: () => void;
   onAccept: () => void;
   onReject: () => void;
 }) {
   const { t } = useI18n();
-  const avatarUrl = item.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop';
+  const fallbackAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop';
+  const isTappable = isActivityType(item.type) && !!item.postId;
+  const showBody = item.body && (item.type === 'like' || item.type === 'comment' || item.type === 'info' || item.isGrouped);
+  const extraCount = item.isGrouped && item.count && item.count > 2 ? item.count - 2 : 0;
 
-  return (
-    <View style={styles.notifCard}>
+  const content = (
+    <View style={[styles.notifCard, !item.isRead && styles.notifUnread]}>
       <View style={styles.notifMainRow}>
         <View style={styles.avatarWrap}>
-          <Image source={{ uri: avatarUrl }} style={styles.avatarImg} />
+          {item.isGrouped && item.senders && item.senders.length > 1 ? (
+            <View style={styles.avatarStack}>
+              <Image
+                source={{ uri: item.senders[1]?.avatarUrl || fallbackAvatar }}
+                style={[styles.avatarImg, styles.avatarStackBack]}
+              />
+              <Image
+                source={{ uri: item.senders[0]?.avatarUrl || fallbackAvatar }}
+                style={[styles.avatarImg, styles.avatarStackFront]}
+              />
+              {extraCount > 0 && (
+                <View style={styles.avatarMoreBadge}>
+                  <Text style={styles.avatarMoreText}>+{extraCount}</Text>
+                </View>
+              )}
+            </View>
+          ) : (
+            <Image
+              source={{ uri: item.avatarUrl || fallbackAvatar }}
+              style={styles.avatarImg}
+            />
+          )}
           <View style={styles.emojiBadge}>
             <Text style={styles.emojiBadgeText}>
-              {item.type === 'request' ? '👋' : item.type === 'friend_accepted' ? '✅' : '🔔'}
+              {item.type === 'request'
+                ? '👋'
+                : item.type === 'friend_accepted'
+                ? '✅'
+                : item.type === 'like'
+                ? '❤️'
+                : item.type === 'comment'
+                ? '💬'
+                : '🔔'}
             </Text>
           </View>
         </View>
 
         <View style={styles.notifInfo}>
-          <Text style={styles.notifText}>
-            <Text style={styles.notifWho}>{item.who}</Text>{' '}
-            <Text style={styles.notifSub}>{t(item.textKey as Parameters<typeof t>[0])}</Text>
-          </Text>
+          {showBody ? (
+            <Text style={styles.notifText}>{item.body}</Text>
+          ) : (
+            <Text style={styles.notifText}>
+              <Text style={styles.notifWho}>{item.who}</Text>{' '}
+              <Text style={styles.notifSub}>{t(item.textKey as Parameters<typeof t>[0])}</Text>
+            </Text>
+          )}
           <Text style={styles.notifTime}>{item.time}</Text>
         </View>
       </View>
@@ -327,6 +484,10 @@ function NotifItem({
           <View style={styles.likeBadge}>
             <Ionicons name="heart" size={16} color="#FF3D6E" />
           </View>
+        ) : item.type === 'comment' ? (
+          <View style={[styles.likeBadge, { backgroundColor: '#EEF2FF' }]}>
+            <Ionicons name="chatbubble" size={16} color={Colors.primary} />
+          </View>
         ) : (
           <View style={[styles.likeBadge, { backgroundColor: '#F0FDF4' }]}>
             <Ionicons name="checkmark-circle" size={16} color="#22C55E" />
@@ -335,6 +496,16 @@ function NotifItem({
       </View>
     </View>
   );
+
+  if (isTappable) {
+    return (
+      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+        {content}
+      </TouchableOpacity>
+    );
+  }
+
+  return content;
 }
 
 const styles = StyleSheet.create({
@@ -359,6 +530,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingBottom: 16,
+    zIndex: 2,
+    ...Platform.select({
+      web: { position: 'relative' as const },
+      default: {},
+    }),
   },
   title: {
     fontSize: 26,
@@ -378,6 +554,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#EBE8FF',
     ...Shadows.soft,
+    ...Platform.select({
+      web: { cursor: 'pointer' as const },
+      default: {},
+    }),
+  },
+  clearBtnDisabled: {
+    opacity: 0.6,
   },
   clearText: {
     fontSize: 11,
@@ -464,6 +647,10 @@ const styles = StyleSheet.create({
     borderColor: '#F6F5FC',
     ...Shadows.soft,
   },
+  notifUnread: {
+    borderColor: '#E8E0FF',
+    backgroundColor: '#FDFCFF',
+  },
   notifMainRow: {
     flex: 1,
     flexDirection: 'row',
@@ -472,6 +659,51 @@ const styles = StyleSheet.create({
   },
   avatarWrap: {
     position: 'relative',
+    width: 52,
+    height: 48,
+  },
+  avatarStack: {
+    width: 52,
+    height: 48,
+    position: 'relative',
+  },
+  avatarStackBack: {
+    position: 'absolute',
+    left: 0,
+    top: 4,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    opacity: 0.9,
+  },
+  avatarStackFront: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  avatarMoreBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  avatarMoreText: {
+    color: '#FFF',
+    fontSize: 8,
+    fontWeight: '800',
   },
   avatarImg: {
     width: 48,
