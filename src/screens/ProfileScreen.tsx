@@ -4,12 +4,13 @@
  * Includes interactive mood status selector, verified user badge, Unsplash banner and avatar,
  * web layout constraints, and sleek settings groups.
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Platform, Dimensions,
-  Modal, TextInput, ActivityIndicator, KeyboardAvoidingView,
+  Modal, TextInput, ActivityIndicator, KeyboardAvoidingView, DeviceEventEmitter,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Gradients, Shadows } from '../constants/colors';
@@ -18,6 +19,9 @@ import type { Lang } from '../i18n';
 import Toggle from '../components/Toggle';
 import * as Haptics from 'expo-haptics';
 import { changeUserPassword, getUserProfile, uploadUserAvatar, uploadUserCover, updateUserProfile, type UserProfile } from '../services/userApi';
+import { getMyPosts, toPostView, type FeedPost, type PostView } from '../services/postApi';
+import ProfileMomentsGrid from '../components/ProfileMomentsGrid';
+import PostSheet from '../components/PostSheet';
 import Toast from 'react-native-toast-message';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -26,6 +30,7 @@ const { width: SW } = Dimensions.get('window');
 interface ProfileScreenProps {
   locationGranted: boolean;
   incognito: boolean;
+  isActive?: boolean;
   onToggleLocation: () => void;
   onToggleIncognito: () => void;
   onLogout: () => void;
@@ -40,7 +45,8 @@ const MOODS = [
 ];
 
 export default function ProfileScreen({
-  locationGranted, incognito, onToggleLocation, onToggleIncognito, onLogout,
+  locationGranted, incognito, isActive = true,
+  onToggleLocation, onToggleIncognito, onLogout,
 }: ProfileScreenProps) {
   const { t, lang, setLang } = useI18n();
   const insets = useSafeAreaInsets();
@@ -64,6 +70,11 @@ export default function ProfileScreen({
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [myPosts, setMyPosts] = useState<FeedPost[]>([]);
+  const [selectedPost, setSelectedPost] = useState<PostView | null>(null);
+  const settingsRef = useRef<ScrollView>(null);
+
+  const profileLink = profile ? `mymo.app/u/${profile.id}` : '';
 
   const genderOptions = [
     { value: 'Male', label: t('auth.genderOptionMale') },
@@ -80,29 +91,56 @@ export default function ProfileScreen({
     : t('auth.dateOfBirth');
 
   const stats = [
-    { n: profile ? String(profile.postCount) : '0', l: t('profile.moments'), icon: 'trail-sign-outline' },
+    { n: String(myPosts.length || (profile ? profile.postCount : 0)), l: t('profile.moments'), icon: 'trail-sign-outline' },
     { n: profile ? String(profile.friendCount) : '0', l: t('profile.friends'), icon: 'people-outline' },
     { n: profile ? String(profile.placeCount) : '0', l: t('profile.places'), icon: 'location-outline' },
   ];
 
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadProfile() {
-      try {
-        const data = await getUserProfile();
-        if (mounted) setProfile(data);
-      } catch (error) {
-        if (!mounted) return;
-        setProfileError(error instanceof Error ? error.message : 'Unable to load profile');
-      } finally {
-        if (mounted) setLoadingProfile(false);
-      }
+  const loadProfile = useCallback(async () => {
+    try {
+      const data = await getUserProfile();
+      setProfile(data);
+      setProfileError('');
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : 'Unable to load profile');
+    } finally {
+      setLoadingProfile(false);
     }
-
-    loadProfile();
-    return () => { mounted = false; };
   }, []);
+
+  const loadMyPosts = useCallback(async () => {
+    try {
+      const posts = await getMyPosts();
+      setMyPosts(posts);
+    } catch {
+      setMyPosts([]);
+    }
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadProfile(), loadMyPosts()]);
+  }, [loadProfile, loadMyPosts]);
+
+  useEffect(() => {
+    refreshAll();
+    const sub1 = DeviceEventEmitter.addListener('post:created', refreshAll);
+    const sub2 = DeviceEventEmitter.addListener('friend:accepted', loadProfile);
+    return () => {
+      sub1.remove();
+      sub2.remove();
+    };
+  }, [refreshAll, loadProfile]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    refreshAll();
+  }, [isActive, refreshAll]);
+
+  const copyProfileLink = async () => {
+    if (!profileLink) return;
+    await Clipboard.setStringAsync(`https://${profileLink}`);
+    Toast.show({ type: 'success', text1: t('profile.linkCopied') });
+  };
 
   const openEditModal = () => {
     if (!profile) return;
@@ -226,20 +264,31 @@ export default function ProfileScreen({
 
   return (
     <ScrollView
+      ref={settingsRef}
       style={styles.container}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
       {/* Cover / Hero image */}
       <View style={styles.heroWrap}>
-        <Image
-          source={{ uri: profile?.coverUrl || 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=600&fit=crop' }}
-          style={styles.heroBg}
-        />
+        <TouchableOpacity activeOpacity={0.9} onPress={() => pickImage('cover')} style={styles.heroTouchable}>
+          <Image
+            source={{ uri: profile?.coverUrl || 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=600&fit=crop' }}
+            style={styles.heroBg}
+          />
+          {uploadingCover && (
+            <View style={styles.heroOverlay}>
+              <ActivityIndicator color={Colors.white} />
+            </View>
+          )}
+          <View style={styles.coverEditHint}>
+            <Ionicons name="camera-outline" size={14} color="#FFF" />
+          </View>
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            Toast.show({ type: 'info', text1: t('profile.settings'), text2: t('profile.settingsDesc') });
+            settingsRef.current?.scrollToEnd({ animated: true });
           }}
           style={[styles.settingsBtn, { top: Math.max(16, insets.top) }]}
         >
@@ -249,6 +298,12 @@ export default function ProfileScreen({
 
       {/* Profile Card Overlay */}
       <View style={styles.profileCard}>
+        {loadingProfile && (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color={Colors.primary} size="small" />
+            <Text style={styles.loadingText}>{t('profile.loading')}</Text>
+          </View>
+        )}
         {profileError ? (
           <View style={styles.errorRow}>
             <Text style={styles.errorText}>{profileError}</Text>
@@ -257,7 +312,7 @@ export default function ProfileScreen({
         {/* Avatar and main info */}
         <View style={styles.avatarRow}>
           <TouchableOpacity
-            onPress={() => Toast.show({ type: 'info', text1: t('profile.changeAvatar'), text2: t('profile.changeAvatarDesc') })}
+            onPress={() => pickImage('avatar')}
             style={styles.avatarBorder}
             activeOpacity={0.9}
           >
@@ -265,6 +320,15 @@ export default function ProfileScreen({
               source={{ uri: profile?.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop' }}
               style={styles.avatarImg}
             />
+            {uploadingAvatar ? (
+              <View style={styles.avatarOverlay}>
+                <ActivityIndicator color={Colors.white} size="small" />
+              </View>
+            ) : (
+              <View style={styles.avatarEditBadge}>
+                <Ionicons name="camera" size={11} color={Colors.primary} />
+              </View>
+            )}
             <View style={styles.moodBadge}>
               <Text style={styles.moodBadgeText}>{currentMood}</Text>
             </View>
@@ -301,34 +365,19 @@ export default function ProfileScreen({
               <Text style={styles.editText}>{t('common.edit')}</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.uploadActions}>
-            <TouchableOpacity
-              onPress={() => pickImage('avatar')}
-              style={styles.uploadButton}
-              activeOpacity={0.85}
-            >
-              {uploadingAvatar ? (
-                <ActivityIndicator color={Colors.white} size="small" />
-              ) : (
-                <Text style={styles.uploadButtonText}>{t('profile.uploadAvatar')}</Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => pickImage('cover')}
-              style={[styles.uploadButton, styles.uploadCoverButton]}
-              activeOpacity={0.85}
-            >
-              {uploadingCover ? (
-                <ActivityIndicator color={Colors.white} size="small" />
-              ) : (
-                <Text style={styles.uploadButtonText}>{t('profile.uploadCover')}</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+
+        {/* Profile invite link */}
+        {profileLink ? (
+          <TouchableOpacity onPress={copyProfileLink} style={styles.linkBox} activeOpacity={0.85}>
+            <Ionicons name="link-outline" size={14} color={Colors.primary} />
+            <Text style={styles.linkText} numberOfLines={1}>{profileLink}</Text>
+            <Text style={styles.linkCopy}>{t('profile.copyLink')}</Text>
+          </TouchableOpacity>
+        ) : null}
 
         {/* GenZ Mood Selector Widget */}
         <View style={styles.moodWidget}>
-          <Text style={styles.widgetLabel}>Hôm nay bạn thế nào?</Text>
+          <Text style={styles.widgetLabel}>{t('profile.moodQuestion')}</Text>
           <View style={styles.moodRow}>
             {MOODS.map(m => (
               <TouchableOpacity
@@ -367,6 +416,18 @@ export default function ProfileScreen({
           ))}
         </View>
       </View>
+
+      <ProfileMomentsGrid
+        posts={myPosts}
+        onPostPress={(post) => {
+          if (!profile) return;
+          setSelectedPost(toPostView(post, profile.displayName, profile.avatarUrl));
+        }}
+      />
+
+      {selectedPost && (
+        <PostSheet post={selectedPost} onClose={() => setSelectedPost(null)} />
+      )}
 
       <Modal
         visible={isEditOpen}
@@ -831,10 +892,32 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
+  heroTouchable: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+  },
   heroBg: {
     width: '100%',
     height: '100%',
     resizeMode: 'cover',
+  },
+  heroOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  coverEditHint: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   settingsBtn: {
     position: 'absolute',
@@ -875,6 +958,25 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
+  },
+  avatarOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarEditBadge: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Shadows.soft,
   },
   moodBadge: {
     position: 'absolute',
@@ -1144,6 +1246,29 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
   editText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: Colors.primary,
+  },
+  linkBox: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F8F7FF',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#EFE9FF',
+  },
+  linkText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textDark,
+  },
+  linkCopy: {
     fontSize: 11,
     fontWeight: '800',
     color: Colors.primary,

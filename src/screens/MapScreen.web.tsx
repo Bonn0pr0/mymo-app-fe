@@ -6,15 +6,20 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, Dimensions, Animated, Platform,
+  ScrollView, Dimensions, Animated, Platform, DeviceEventEmitter, Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Gradients, Shadows } from '../constants/colors';
 import { useI18n } from '../i18n';
 import type { Friend } from '../constants/data';
-import { FRIENDS, VIBE_SPOTS } from '../constants/data';
+import { VIBE_SPOTS } from '../constants/data';
 import FriendSheet from '../components/FriendSheet';
+import PostSheet from '../components/PostSheet';
+import { getNearbyPosts, toPostView, type NearbyPost, type PostView } from '../services/postApi';
+import { getFriendsLocations } from '../services/friendsApi';
+import { updateUserLocation } from '../services/userApi';
+import { friendLocationToMapPin, type MapFriendPin } from '../utils/mapFriendUtils';
 import Toast from 'react-native-toast-message';
 
 // ─── Mapbox GL JS (web-only) ──────────────────────────────────────────────────
@@ -91,13 +96,7 @@ const MYMO_STYLE: mapboxgl.Style = {
   ],
 };
 
-// ─── Compute realistic latlng from x/y % offsets around HCMC ─────────────────
-const friendCoords = FRIENDS.map(f => ({
-  ...f,
-  lng: DEFAULT_CENTER[0] + (f.x - 50) * 0.0008,
-  lat: DEFAULT_CENTER[1] + (50 - f.y) * 0.0006,
-}));
-
+// ─── Compute vibe spot coords around default center ───────────────────────────
 const vibeCoords = VIBE_SPOTS.map(s => ({
   ...s,
   lng: DEFAULT_CENTER[0] + (s.x - 50) * 0.0008,
@@ -109,16 +108,104 @@ interface MapScreenProps {
   locationGranted: boolean;
   visibleOnMap: boolean;
   incognito: boolean;
+  isActive?: boolean;
   onFriendTap: (f: Friend) => void;
   selectedFriend: Friend | null;
   onCloseSheet: () => void;
   onMessage: (f: Friend) => void;
 }
 
+function createFriendMarkerEl(friend: MapFriendPin, onTap: () => void): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = 'display:flex; flex-direction:column; align-items:center; cursor:pointer; z-index:6;';
+
+  const ring = document.createElement('div');
+  ring.style.cssText = `
+    width:48px; height:48px; border-radius:50%;
+    background:${friend.color}; border:3px solid #fff;
+    display:flex; align-items:center; justify-content:center;
+    font-size:22px; box-shadow:0 4px 16px rgba(124,91,255,0.4);
+    position:relative; overflow:hidden;
+  `;
+
+  if (friend.avatarUrl) {
+    const img = document.createElement('img');
+    img.src = friend.avatarUrl;
+    img.alt = friend.name;
+    img.style.cssText = 'width:100%; height:100%; object-fit:cover; display:block;';
+    ring.appendChild(img);
+  } else {
+    ring.textContent = friend.emoji;
+  }
+
+  if (friend.status === 'active') {
+    const dot = document.createElement('div');
+    dot.style.cssText = `
+      position:absolute; bottom:0; right:0;
+      width:12px; height:12px; border-radius:50%;
+      background:#10B981; border:2px solid #fff;
+    `;
+    ring.appendChild(dot);
+  }
+
+  const nameTag = document.createElement('div');
+  nameTag.style.cssText = `
+    margin-top:4px; background:rgba(255,255,255,0.95);
+    padding:2px 8px; border-radius:10px;
+    font-size:10px; font-weight:700; color:#2A1758;
+    box-shadow:0 2px 8px rgba(124,91,255,0.12); white-space:nowrap;
+  `;
+  nameTag.textContent = friend.name;
+
+  el.appendChild(ring);
+  el.appendChild(nameTag);
+  el.addEventListener('click', onTap);
+  return el;
+}
+
+function createPostMarkerEl(post: NearbyPost, onTap: () => void): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = 'display:flex; flex-direction:column; align-items:center; cursor:pointer; z-index:5;';
+
+  const thumbWrap = document.createElement('div');
+  thumbWrap.style.cssText = `
+    width:56px; height:56px; border-radius:14px;
+    border:3px solid #fff; overflow:hidden;
+    box-shadow:0 4px 20px rgba(124,91,255,0.55);
+    background:#F5F0FF; display:flex; align-items:center; justify-content:center;
+  `;
+
+  if (post.thumbnailUrl) {
+    const img = document.createElement('img');
+    img.src = post.thumbnailUrl;
+    img.alt = post.displayName;
+    img.style.cssText = 'width:100%; height:100%; object-fit:cover; display:block;';
+    thumbWrap.appendChild(img);
+  } else {
+    thumbWrap.textContent = '📷';
+    thumbWrap.style.fontSize = '22px';
+  }
+
+  const nameTag = document.createElement('div');
+  nameTag.style.cssText = `
+    margin-top:4px; max-width:72px; background:rgba(255,255,255,0.95);
+    padding:2px 6px; border-radius:8px;
+    font-size:9px; font-weight:700; color:#2A1758;
+    box-shadow:0 2px 8px rgba(124,91,255,0.12);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center;
+  `;
+  nameTag.textContent = post.displayName;
+
+  el.appendChild(thumbWrap);
+  el.appendChild(nameTag);
+  el.addEventListener('click', onTap);
+  return el;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function MapScreen({
-  locationGranted, visibleOnMap, incognito,
+  locationGranted, visibleOnMap, incognito, isActive = true,
   onFriendTap, selectedFriend, onCloseSheet, onMessage,
 }: MapScreenProps) {
   const { t } = useI18n();
@@ -126,12 +213,110 @@ export default function MapScreen({
   const [searchText, setSearchText] = useState('');
   const [cssLoaded, setCssLoaded] = useState(false);
   const [mapTheme, setMapTheme] = useState<'purple' | 'yellow'>('purple');
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [nearbyPosts, setNearbyPosts] = useState<NearbyPost[]>([]);
+  const [selectedPost, setSelectedPost] = useState<PostView | null>(null);
+  const [friendPins, setFriendPins] = useState<MapFriendPin[]>([]);
+  const [mapReady, setMapReady] = useState(false);
 
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const heatMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  const postMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const hasFittedPostsRef = useRef(false);
   const MAP_CONTAINER_ID = 'mymo-mapbox-container';
+
+  const mapCenter: [number, number] = userCoords
+    ? [userCoords.lng, userCoords.lat]
+    : DEFAULT_CENTER;
+
+  // ── User location (browser geolocation) ────────────────────────────────────
+  useEffect(() => {
+    if (!locationGranted) {
+      setUserCoords(null);
+      return;
+    }
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserCoords({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+      },
+      () => {},
+      { enableHighAccuracy: false, timeout: 10000 },
+    );
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setUserCoords({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+      },
+      () => {},
+      { enableHighAccuracy: false, maximumAge: 30000, timeout: 10000 },
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [locationGranted]);
+
+  // ── Share own location with server ───────────────────────────────────────
+  useEffect(() => {
+    if (!locationGranted || !userCoords) return;
+    const sharing = visibleOnMap && !incognito;
+    updateUserLocation(
+      sharing ? userCoords.lat : null,
+      sharing ? userCoords.lng : null,
+    );
+  }, [locationGranted, visibleOnMap, incognito, userCoords?.lat, userCoords?.lng]);
+
+  // ── Fetch friend locations ─────────────────────────────────────────────────
+  const fetchFriendLocations = useCallback(async () => {
+    const lat = userCoords?.lat;
+    const lng = userCoords?.lng;
+    try {
+      const locations = await getFriendsLocations();
+      setFriendPins(locations.map(loc => friendLocationToMapPin(loc, lat, lng)));
+    } catch {
+      setFriendPins([]);
+    }
+  }, [userCoords]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    fetchFriendLocations();
+    const interval = setInterval(fetchFriendLocations, 30000);
+    const subAccepted = DeviceEventEmitter.addListener('friend:accepted', fetchFriendLocations);
+    const subRefetch = DeviceEventEmitter.addListener('friends:refetch', fetchFriendLocations);
+    return () => {
+      clearInterval(interval);
+      subAccepted.remove();
+      subRefetch.remove();
+    };
+  }, [isActive, fetchFriendLocations]);
+
+  // ── Fetch nearby posts ─────────────────────────────────────────────────────
+  const fetchNearbyPosts = useCallback(async () => {
+    const lat = userCoords?.lat ?? DEFAULT_CENTER[1];
+    const lng = userCoords?.lng ?? DEFAULT_CENTER[0];
+    try {
+      const posts = await getNearbyPosts(lat, lng, 5, 1, 20);
+      setNearbyPosts(posts);
+    } catch {
+      setNearbyPosts([]);
+    }
+  }, [userCoords]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    fetchNearbyPosts();
+    const sub = DeviceEventEmitter.addListener('post:created', fetchNearbyPosts);
+    return () => sub.remove();
+  }, [isActive, fetchNearbyPosts]);
 
   // ── Apply theme colors to map layers ───────────────────────────────────────
   useEffect(() => {
@@ -208,7 +393,7 @@ export default function MapScreen({
     const map = new mapboxgl.Map({
       container,
       style: 'mapbox://styles/mapbox/streets-v12',
-      center: DEFAULT_CENTER,
+      center: mapCenter,
       zoom: DEFAULT_ZOOM,
       attributionControl: false,
       logoPosition: 'bottom-left',
@@ -222,52 +407,6 @@ export default function MapScreen({
       setTimeout(() => {
         map.resize();
       }, 150);
-
-      // ── Friend markers ──────────────────────────────────────────────────
-      friendCoords.forEach(f => {
-        const el = document.createElement('div');
-        el.style.cssText = `
-          display:flex; flex-direction:column; align-items:center; cursor:pointer;
-        `;
-
-        const ring = document.createElement('div');
-        ring.style.cssText = `
-          width:48px; height:48px; border-radius:50%;
-          background:${f.color}; border:3px solid #fff;
-          display:flex; align-items:center; justify-content:center;
-          font-size:22px; box-shadow:0 4px 16px rgba(124,91,255,0.4);
-          position:relative;
-        `;
-        ring.textContent = f.emoji;
-
-        if (f.status === 'active') {
-          const dot = document.createElement('div');
-          dot.style.cssText = `
-            position:absolute; bottom:0; right:0;
-            width:12px; height:12px; border-radius:50%;
-            background:#10B981; border:2px solid #fff;
-          `;
-          ring.appendChild(dot);
-        }
-
-        const nameTag = document.createElement('div');
-        nameTag.style.cssText = `
-          margin-top:4px; background:rgba(255,255,255,0.95);
-          padding:2px 8px; border-radius:10px;
-          font-size:10px; font-weight:700; color:#2A1758;
-          box-shadow:0 2px 8px rgba(124,91,255,0.12); white-space:nowrap;
-        `;
-        nameTag.textContent = f.name;
-
-        el.appendChild(ring);
-        el.appendChild(nameTag);
-        el.addEventListener('click', () => onFriendTap(f));
-
-        const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
-          .setLngLat([f.lng, f.lat])
-          .addTo(map);
-        markersRef.current.push(marker);
-      });
 
       // ── Vibe heatmap markers ────────────────────────────────────────────
       vibeCoords.forEach(s => {
@@ -313,8 +452,10 @@ export default function MapScreen({
       `;
       myEl.appendChild(myDot);
       userMarkerRef.current = new mapboxgl.Marker({ element: myEl, anchor: 'center' })
-        .setLngLat(DEFAULT_CENTER)
+        .setLngLat(mapCenter)
         .addTo(map);
+
+      setMapReady(true);
     });
 
     return () => {
@@ -322,10 +463,69 @@ export default function MapScreen({
       mapRef.current = null;
       markersRef.current = [];
       heatMarkersRef.current = [];
+      postMarkersRef.current = [];
       userMarkerRef.current = null;
+      setMapReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cssLoaded]);
+
+  // ── Sync post markers ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+
+    postMarkersRef.current.forEach(m => m.remove());
+    postMarkersRef.current = [];
+
+    nearbyPosts.forEach(post => {
+      const el = createPostMarkerEl(post, () => setSelectedPost(toPostView(post)));
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
+        .setLngLat([post.longitude, post.latitude])
+        .addTo(map);
+      postMarkersRef.current.push(marker);
+    });
+
+    if (nearbyPosts.length > 0 && !hasFittedPostsRef.current) {
+      hasFittedPostsRef.current = true;
+      if (nearbyPosts.length === 1) {
+        const post = nearbyPosts[0];
+        map.flyTo({
+          center: [post.longitude, post.latitude],
+          zoom: DEFAULT_ZOOM,
+          duration: 800,
+        });
+      } else {
+        const bounds = new mapboxgl.LngLatBounds();
+        nearbyPosts.forEach(p => bounds.extend([p.longitude, p.latitude]));
+        if (userCoords) bounds.extend([userCoords.lng, userCoords.lat]);
+        map.fitBounds(bounds, { padding: 80, maxZoom: DEFAULT_ZOOM, duration: 800 });
+      }
+    }
+  }, [nearbyPosts, mapReady, userCoords]);
+
+  // ── Sync friend markers ────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+
+    markersRef.current.forEach(m => m.remove());
+    markersRef.current = [];
+
+    friendPins.forEach(f => {
+      const el = createFriendMarkerEl(f, () => onFriendTap(f));
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
+        .setLngLat([f.lng, f.lat])
+        .addTo(map);
+      markersRef.current.push(marker);
+    });
+  }, [friendPins, mapReady, onFriendTap]);
+
+  // ── Move user pin when coords update ───────────────────────────────────────
+  useEffect(() => {
+    if (!userMarkerRef.current || !userCoords) return;
+    userMarkerRef.current.setLngLat([userCoords.lng, userCoords.lat]);
+  }, [userCoords]);
 
   // ── Show/hide user pin based on permission ─────────────────────────────────
   useEffect(() => {
@@ -345,7 +545,7 @@ export default function MapScreen({
   // ── Fly to selected friend ───────────────────────────────────────────────
   useEffect(() => {
     if (!selectedFriend || !mapRef.current) return;
-    const friend = friendCoords.find(f => f.id === selectedFriend.id);
+    const friend = friendPins.find(f => f.id === selectedFriend.id);
     if (friend) {
       mapRef.current.flyTo({
         center: [friend.lng, friend.lat],
@@ -353,13 +553,15 @@ export default function MapScreen({
         duration: 1000,
       });
     }
-  }, [selectedFriend]);
+  }, [selectedFriend, friendPins]);
 
   // ── Recenter ───────────────────────────────────────────────────────────────
   const recenter = useCallback(() => {
-    mapRef.current?.flyTo({ center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, duration: 800 });
+    mapRef.current?.flyTo({ center: mapCenter, zoom: DEFAULT_ZOOM, duration: 800 });
+    fetchNearbyPosts();
+    fetchFriendLocations();
     Toast.show({ type: 'success', text1: t('map.centered') });
-  }, [t]);
+  }, [t, mapCenter, fetchNearbyPosts, fetchFriendLocations]);
 
   // ── Zoom ───────────────────────────────────────────────────────────────────
   const zoomIn  = useCallback(() => mapRef.current?.zoomIn(), []);
@@ -474,14 +676,18 @@ export default function MapScreen({
       {/* ── Bottom friend chips ── */}
       <View style={styles.chipWrap}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          {FRIENDS.map(f => (
+          {friendPins.map(f => (
             <TouchableOpacity
               key={f.id}
               onPress={() => onFriendTap(f)}
               style={styles.chip}
             >
               <View style={[styles.chipAvatar, { backgroundColor: f.color }]}>
-                <Text style={styles.chipEmoji}>{f.emoji}</Text>
+                {f.avatarUrl ? (
+                  <Image source={{ uri: f.avatarUrl }} style={styles.chipAvatarImg} />
+                ) : (
+                  <Text style={styles.chipEmoji}>{f.emoji}</Text>
+                )}
               </View>
               <View>
                 <Text style={styles.chipName}>{f.name}</Text>
@@ -491,6 +697,14 @@ export default function MapScreen({
           ))}
         </ScrollView>
       </View>
+
+      {/* ── Post detail sheet ── */}
+      {selectedPost && (
+        <PostSheet
+          post={selectedPost}
+          onClose={() => setSelectedPost(null)}
+        />
+      )}
 
       {/* ── Friend detail sheet ── */}
       {selectedFriend && (
@@ -692,6 +906,11 @@ const styles = StyleSheet.create({
   },
   chipEmoji: {
     fontSize: 14,
+  },
+  chipAvatarImg: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
   },
   chipName: {
     fontSize: 12,

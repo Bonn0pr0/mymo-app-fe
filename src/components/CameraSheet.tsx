@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import {
   View, Text, Modal, TouchableOpacity, StyleSheet, Animated,
-  StatusBar, Platform, Image,
+  StatusBar, Platform, Image, DeviceEventEmitter,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import Toast from 'react-native-toast-message';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadMedia } from '../services/mediaApi';
 import { createPost } from '../services/postApi';
+import { buildImageFormData } from '../utils/imageFormData';
 import { getNearbyPlaces, pickClosestPlace, PlaceResult } from '../services/placeApi';
 
 interface CameraSheetProps {
@@ -28,6 +29,7 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
   const [nearestPlace, setNearestPlace] = useState<PlaceResult | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [resolvingPlace, setResolvingPlace] = useState(false);
+  const [visibility, setVisibility] = useState<'Public' | 'Friends'>('Public');
   const slideAnim = useRef(new Animated.Value(800)).current;
 
   const useNativeDriver = Platform.OS !== 'web';
@@ -149,26 +151,6 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
   };
 
   // Xây dựng FormData chứa file ảnh, xử lý khác nhau giữa Web và Mobile.
-  // Trên Mobile (Android/iOS): dùng object {uri, name, type} như bình thường.
-  // Trên Web: uri là dạng blob:/data:, cần fetch về Blob thật thì server mới nhận đúng file.
-  const buildImageFormData = async (uri: string, fileName: string, fileType: string) => {
-    const formData = new FormData();
-
-    if (Platform.OS === 'web') {
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      formData.append('file', blob, fileName);
-    } else {
-      formData.append('file', {
-        uri,
-        name: fileName,
-        type: fileType,
-      } as any);
-    }
-
-    return formData;
-  };
-
   // Nút "Đăng ngay": upload media -> lấy id -> tạo post với mediaId + placeId
   const handlePostNow = async () => {
     if (!locationGranted) {
@@ -218,7 +200,7 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
       const payload: any = {
         caption: t('cam.defaultCaption') || 'Shared from MYMO',
         postType: 'Image',
-        visibility: 'Public',
+        visibility,
         mediaIds: [mediaId],
       };
 
@@ -242,6 +224,7 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
       }
 
       await createPost(payload);
+      DeviceEventEmitter.emit('post:created');
 
       Toast.show({ type: 'success', text1: t('cam.posted'), text2: t('cam.postedDesc') });
       setPosting(false);
@@ -350,6 +333,26 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
             </View>
           ) : (
             <View style={styles.postActions}>
+              <View style={styles.visibilityRow}>
+                <TouchableOpacity
+                  onPress={() => setVisibility('Public')}
+                  style={[styles.visibilityChip, visibility === 'Public' && styles.visibilityChipActive]}
+                >
+                  <Ionicons name="earth-outline" size={14} color={visibility === 'Public' ? Colors.white : Colors.primary} />
+                  <Text style={[styles.visibilityText, visibility === 'Public' && styles.visibilityTextActive]}>
+                    {t('cam.visibilityPublic')}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setVisibility('Friends')}
+                  style={[styles.visibilityChip, visibility === 'Friends' && styles.visibilityChipActive]}
+                >
+                  <Ionicons name="people-outline" size={14} color={visibility === 'Friends' ? Colors.white : Colors.primary} />
+                  <Text style={[styles.visibilityText, visibility === 'Friends' && styles.visibilityTextActive]}>
+                    {t('cam.visibilityFriends')}
+                  </Text>
+                </TouchableOpacity>
+              </View>
               <TouchableOpacity
                 onPress={handlePostNow}
                 activeOpacity={0.85}
@@ -537,6 +540,34 @@ const styles = StyleSheet.create({
   },
   postActions: {
     gap: 10,
+  },
+  visibilityRow: {
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+  },
+  visibilityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  visibilityChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  visibilityText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.white,
+  },
+  visibilityTextActive: {
+    color: Colors.white,
   },
   postBtn: {
     borderRadius: 16,

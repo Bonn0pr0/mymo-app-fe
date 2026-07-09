@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { normalizeFriendLocations, type FriendLocation } from '../utils/mapFriendUtils';
 
 const BASE_URL = 'https://beexe-production.up.railway.app/api';
 
@@ -16,6 +17,24 @@ export interface FriendSummary {
   avatarUrl: string | null;
   requestedAt?: string;
   mutualFriendsCount?: number;
+}
+
+export interface PendingFriendRequest {
+  userId: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+  requestedAt: string;
+}
+
+function normalizePendingRequest(raw: Record<string, unknown>): PendingFriendRequest {
+  return {
+    userId: String(raw.requesterId || raw.userId || raw.id),
+    username: String(raw.requesterUsername || raw.username || ''),
+    displayName: String(raw.requesterDisplayName || raw.displayName || raw.requesterUsername || 'Friend'),
+    avatarUrl: (raw.requesterAvatarUrl ?? raw.avatarUrl ?? null) as string | null,
+    requestedAt: String(raw.requestedAt || raw.createdAt || new Date().toISOString()),
+  };
 }
 
 export interface FriendStatusResponse {
@@ -99,9 +118,9 @@ export async function getFriends(): Promise<FriendSummary[]> {
   return response.data;
 }
 
-export async function getFriendRequests(): Promise<FriendSummary[]> {
-  const response = await requestJson<ApiResponse<FriendSummary[]>>('/friends/requests', 'GET');
-  return response.data;
+export async function getFriendRequests(): Promise<PendingFriendRequest[]> {
+  const response = await requestJson<ApiResponse<Record<string, unknown>[]>>('/friends/requests', 'GET');
+  return (response.data || []).map(normalizePendingRequest);
 }
 
 export async function getSentRequests(): Promise<FriendSummary[]> {
@@ -132,6 +151,15 @@ export async function getFriendCount(): Promise<number> {
 export async function getOnlineFriends(): Promise<FriendSummary[]> {
   const response = await requestJson<ApiResponse<FriendSummary[]>>('/friends/online', 'GET');
   return response.data;
+}
+
+export async function getFriendsLocations(): Promise<FriendLocation[]> {
+  try {
+    const response = await requestJson<ApiResponse<Record<string, unknown>[]>>('/friends/locations', 'GET');
+    return normalizeFriendLocations(response.data || []);
+  } catch {
+    return [];
+  }
 }
 
 export async function searchFriends(keyword: string): Promise<FriendSummary[]> {

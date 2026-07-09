@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Animated,
-  Platform, StatusBar,
+  Platform, StatusBar, DeviceEventEmitter,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -77,6 +77,31 @@ function AppInner() {
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [chatWith, setChatWith] = useState<Friend | null>(null);
   const [addFriendOpen, setAddFriendOpen] = useState(false);
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+
+  useEffect(() => {
+    if (screen !== 'app') return;
+
+    const loadUnread = async () => {
+      try {
+        const { getUnreadCount } = await import('./src/services/notificationsApi');
+        const count = await getUnreadCount();
+        setUnreadNotifCount(count);
+      } catch {
+        setUnreadNotifCount(0);
+      }
+    };
+
+    loadUnread();
+    const timer = setInterval(loadUnread, 20000);
+    const sub = DeviceEventEmitter.addListener('friend:requested', loadUnread);
+    const sub2 = DeviceEventEmitter.addListener('friend:accepted', loadUnread);
+    return () => {
+      clearInterval(timer);
+      sub.remove();
+      sub2.remove();
+    };
+  }, [screen]);
 
   useEffect(() => {
     if (screen === 'app' && !permissionAsked) {
@@ -118,6 +143,7 @@ function AppInner() {
             locationGranted={!!locationGranted}
             visibleOnMap={visibleOnMap}
             incognito={incognito}
+            isActive={tab === 'map' && !cameraOpen}
             onFriendTap={setSelectedFriend}
             selectedFriend={selectedFriend}
             onCloseSheet={() => setSelectedFriend(null)}
@@ -131,11 +157,17 @@ function AppInner() {
             onAdd={() => setAddFriendOpen(true)}
           />
         )}
-        {tab === 'notifications' && <NotificationsScreen />}
+        {tab === 'notifications' && (
+          <NotificationsScreen
+            isActive={tab === 'notifications'}
+            onUnreadCountChange={setUnreadNotifCount}
+          />
+        )}
         {tab === 'profile' && (
           <ProfileScreen
             locationGranted={!!locationGranted}
             incognito={incognito}
+            isActive={tab === 'profile'}
             onToggleLocation={() => setLocationGranted(v => !v)}
             onToggleIncognito={() => {
               setIncognito(v => {
@@ -158,7 +190,12 @@ function AppInner() {
       </View>
 
       {/* Bottom nav */}
-      <BottomNav tab={tab} setTab={setTab} onCamera={() => setCameraOpen(true)} />
+      <BottomNav
+        tab={tab}
+        setTab={setTab}
+        onCamera={() => setCameraOpen(true)}
+        unreadNotifCount={unreadNotifCount}
+      />
 
       {/* Modals & Sheets */}
       {(!permissionAsked || locationGranted === null) && screen === 'app' && (
@@ -197,7 +234,14 @@ function AppInner() {
 
 /* =================== BOTTOM NAV =================== */
 
-function BottomNav({ tab, setTab, onCamera }: { tab: Tab; setTab: (t: Tab) => void; onCamera: () => void }) {
+function BottomNav({
+  tab, setTab, onCamera, unreadNotifCount = 0,
+}: {
+  tab: Tab;
+  setTab: (t: Tab) => void;
+  onCamera: () => void;
+  unreadNotifCount?: number;
+}) {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
 
@@ -226,7 +270,12 @@ function BottomNav({ tab, setTab, onCamera }: { tab: Tab; setTab: (t: Tab) => vo
         </TouchableOpacity>
 
         {/* Right items */}
-        <NavItem item={navItems[2]} active={tab === navItems[2].id} onPress={() => setTab(navItems[2].id)} />
+        <NavItem
+          item={navItems[2]}
+          active={tab === navItems[2].id}
+          onPress={() => setTab(navItems[2].id)}
+          badgeCount={unreadNotifCount}
+        />
         <NavItem item={navItems[3]} active={tab === navItems[3].id} onPress={() => setTab(navItems[3].id)} />
       </View>
     </View>
@@ -234,11 +283,12 @@ function BottomNav({ tab, setTab, onCamera }: { tab: Tab; setTab: (t: Tab) => vo
 }
 
 function NavItem({
-  item, active, onPress,
+  item, active, onPress, badgeCount = 0,
 }: {
   item: { id: Tab; icon: string; iconActive: string; label: string };
   active: boolean;
   onPress: () => void;
+  badgeCount?: number;
 }) {
   const scale = React.useRef(new Animated.Value(1)).current;
 
@@ -259,6 +309,11 @@ function NavItem({
             size={22}
             color={active ? Colors.primary : Colors.textMuted}
           />
+          {badgeCount > 0 && (
+            <View style={styles.navBadge}>
+              <Text style={styles.navBadgeText}>{badgeCount > 9 ? '9+' : badgeCount}</Text>
+            </View>
+          )}
         </View>
         <Text style={[styles.navLabel, active && styles.navLabelActive]}>{item.label}</Text>
       </TouchableOpacity>
@@ -317,9 +372,29 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     justifyContent: 'center',
     alignItems: 'center',
+    position: 'relative',
   },
   navIconWrapActive: {
     backgroundColor: Colors.primaryTint,
+  },
+  navBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#EF4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: Colors.white,
+  },
+  navBadgeText: {
+    color: Colors.white,
+    fontSize: 8,
+    fontWeight: '800',
   },
   navLabel: {
     fontSize: 9,

@@ -75,6 +75,102 @@ export async function createPost(payload: PostPayload): Promise<PostResponse> {
   return response.data;
 }
 
+export interface NearbyPost {
+  postId: string;
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  thumbnailUrl: string | null;
+  caption: string;
+  latitude: number;
+  longitude: number;
+  createdAt: string;
+  likeCount: number;
+  commentCount: number;
+}
+
+export interface PostMedia {
+  mediaId: string;
+  url: string;
+  thumbnailUrl?: string | null;
+}
+
+export interface FeedPost {
+  postId: string;
+  userId: string;
+  caption?: string | null;
+  visibility?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  createdAt: string;
+  likeCount: number;
+  commentCount: number;
+  media: PostMedia[];
+}
+
+export interface PostView {
+  postId: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  thumbnailUrl?: string | null;
+  caption: string;
+  likeCount: number;
+  commentCount: number;
+}
+
+export function getPostThumbnail(post: FeedPost | NearbyPost): string | null {
+  if ('thumbnailUrl' in post && post.thumbnailUrl) return post.thumbnailUrl;
+  const media = 'media' in post ? post.media?.[0] : null;
+  return media?.thumbnailUrl || media?.url || null;
+}
+
+export function toPostView(
+  post: FeedPost | NearbyPost,
+  displayName?: string,
+  avatarUrl?: string | null,
+): PostView {
+  return {
+    postId: post.postId,
+    displayName: 'displayName' in post ? post.displayName : (displayName || 'Friend'),
+    avatarUrl: 'avatarUrl' in post ? post.avatarUrl : avatarUrl,
+    thumbnailUrl: getPostThumbnail(post),
+    caption: post.caption || '',
+    likeCount: post.likeCount,
+    commentCount: post.commentCount,
+  };
+}
+
+export async function getNearbyPosts(
+  lat: number,
+  lng: number,
+  radius = 5,
+  page = 1,
+  pageSize = 20,
+): Promise<NearbyPost[]> {
+  const query = `?lat=${lat}&lng=${lng}&radius=${radius}&page=${page}&pageSize=${pageSize}`;
+  const response = await requestJson<ApiResponse<NearbyPost[]>>(`/posts/nearby${query}`, 'GET');
+  return response.data ?? [];
+}
+
+export async function getFriendsFeed(): Promise<FeedPost[]> {
+  const response = await requestJson<ApiResponse<FeedPost[]>>('/posts/feed/friends', 'GET');
+  return response.data ?? [];
+}
+
+export async function getFeed(): Promise<FeedPost[]> {
+  const response = await requestJson<ApiResponse<FeedPost[]>>('/posts/feed', 'GET');
+  return response.data ?? [];
+}
+
+export async function getMyPosts(): Promise<FeedPost[]> {
+  const response = await requestJson<ApiResponse<FeedPost[]>>('/posts/me', 'GET');
+  return response.data ?? [];
+}
+
 export default {
   createPost,
+  getNearbyPosts,
+  getFriendsFeed,
+  getFeed,
+  getMyPosts,
 };

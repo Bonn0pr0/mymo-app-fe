@@ -1,16 +1,22 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ScrollView, Dimensions, Animated,
+  ScrollView, Dimensions, Image, DeviceEventEmitter,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import Mapbox, { Camera, MapView, MarkerView, UserLocation, BackgroundLayer, FillLayer } from '@rnmapbox/maps';
+import * as Location from 'expo-location';
 import { Colors, Gradients, Shadows } from '../constants/colors';
 import { useI18n } from '../i18n';
 import type { Friend } from '../constants/data';
-import { FRIENDS, VIBE_SPOTS } from '../constants/data';
+import { VIBE_SPOTS } from '../constants/data';
 import FriendSheet from '../components/FriendSheet';
+import PostSheet from '../components/PostSheet';
+import { getNearbyPosts, toPostView, type NearbyPost, type PostView } from '../services/postApi';
+import { getFriendsLocations } from '../services/friendsApi';
+import { updateUserLocation } from '../services/userApi';
+import { friendLocationToMapPin, type MapFriendPin } from '../utils/mapFriendUtils';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 
@@ -117,6 +123,7 @@ interface MapScreenProps {
   locationGranted: boolean;
   visibleOnMap: boolean;
   incognito: boolean;
+  isActive?: boolean;
   onFriendTap: (f: Friend) => void;
   selectedFriend: Friend | null;
   onCloseSheet: () => void;
@@ -128,21 +135,19 @@ const DEFAULT_CENTER: [number, number] = [106.8376, 10.8382];
 const DEFAULT_ZOOM = 17;
 
 export default function MapScreen({
-  locationGranted, visibleOnMap, incognito,
+  locationGranted, visibleOnMap, incognito, isActive = true,
   onFriendTap, selectedFriend, onCloseSheet, onMessage,
 }: MapScreenProps) {
   const { t } = useI18n();
   const [showHeat, setShowHeat] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [mapTheme, setMapTheme] = useState<'purple' | 'yellow'>('purple');
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [nearbyPosts, setNearbyPosts] = useState<NearbyPost[]>([]);
+  const [selectedPost, setSelectedPost] = useState<PostView | null>(null);
+  const [friendPins, setFriendPins] = useState<MapFriendPin[]>([]);
   const cameraRef = useRef<Camera>(null);
-
-  // Realistic coords derived from FRIENDS x/y % offsets around HCMC
-  const friendCoords = React.useMemo(() => FRIENDS.map(f => ({
-    ...f,
-    lng: DEFAULT_CENTER[0] + (f.x - 50) * 0.0008,
-    lat: DEFAULT_CENTER[1] + (50 - f.y) * 0.0006,
-  })), []);
+  const hasFittedPostsRef = useRef(false);
 
   // Vibe blob coords
   const vibeCoords = React.useMemo(() => VIBE_SPOTS.map(s => ({
@@ -151,21 +156,140 @@ export default function MapScreen({
     lat: DEFAULT_CENTER[1] + (50 - s.y) * 0.0006,
   })), []);
 
+  // ── User location ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!locationGranted) {
+      setUserCoords(null);
+      return;
+    }
+
+    let cancelled = false;
+    let subscription: Location.LocationSubscription | null = null;
+
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted' || cancelled) return;
+
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (!cancelled) {
+          setUserCoords({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          });
+        }
+
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: 50,
+            timeInterval: 30000,
+          },
+          pos => {
+            if (!cancelled) {
+              setUserCoords({
+                lat: pos.coords.latitude,
+                lng: pos.coords.longitude,
+              });
+            }
+          },
+        );
+      } catch {
+        // fallback to default center
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      subscription?.remove();
+    };
+  }, [locationGranted]);
+
+  // ── Share own location with server ───────────────────────────────────────
+  useEffect(() => {
+    if (!locationGranted || !userCoords) return;
+    const sharing = visibleOnMap && !incognito;
+    updateUserLocation(
+      sharing ? userCoords.lat : null,
+      sharing ? userCoords.lng : null,
+    );
+  }, [locationGranted, visibleOnMap, incognito, userCoords?.lat, userCoords?.lng]);
+
+  // ── Fetch friend locations ───────────────────────────────────────────────
+  const fetchFriendLocations = useCallback(async () => {
+    const lat = userCoords?.lat;
+    const lng = userCoords?.lng;
+    try {
+      const locations = await getFriendsLocations();
+      setFriendPins(locations.map(loc => friendLocationToMapPin(loc, lat, lng)));
+    } catch {
+      setFriendPins([]);
+    }
+  }, [userCoords]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    fetchFriendLocations();
+    const interval = setInterval(fetchFriendLocations, 30000);
+    const subAccepted = DeviceEventEmitter.addListener('friend:accepted', fetchFriendLocations);
+    const subRefetch = DeviceEventEmitter.addListener('friends:refetch', fetchFriendLocations);
+    return () => {
+      clearInterval(interval);
+      subAccepted.remove();
+      subRefetch.remove();
+    };
+  }, [isActive, fetchFriendLocations]);
+
+  // ── Fetch nearby posts ───────────────────────────────────────────────────
+  const fetchNearbyPosts = useCallback(async () => {
+    const lat = userCoords?.lat ?? DEFAULT_CENTER[1];
+    const lng = userCoords?.lng ?? DEFAULT_CENTER[0];
+    try {
+      const posts = await getNearbyPosts(lat, lng, 5, 1, 20);
+      setNearbyPosts(posts);
+    } catch {
+      setNearbyPosts([]);
+    }
+  }, [userCoords]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    fetchNearbyPosts();
+    const sub = DeviceEventEmitter.addListener('post:created', fetchNearbyPosts);
+    return () => sub.remove();
+  }, [isActive, fetchNearbyPosts]);
+
+  useEffect(() => {
+    if (nearbyPosts.length === 0 || hasFittedPostsRef.current || !cameraRef.current) return;
+    hasFittedPostsRef.current = true;
+    const post = nearbyPosts[0];
+    cameraRef.current.flyTo([post.longitude, post.latitude], 800);
+    cameraRef.current.zoomTo(DEFAULT_ZOOM, 800);
+  }, [nearbyPosts]);
+
+  const mapCenter: [number, number] = userCoords
+    ? [userCoords.lng, userCoords.lat]
+    : DEFAULT_CENTER;
+
   // ── Fly to selected friend ───────────────────────────────────────────────
   useEffect(() => {
     if (!selectedFriend || !cameraRef.current) return;
-    const friend = friendCoords.find(f => f.id === selectedFriend.id);
+    const friend = friendPins.find(f => f.id === selectedFriend.id);
     if (friend) {
       cameraRef.current.flyTo([friend.lng, friend.lat], 800);
       cameraRef.current.zoomTo(15, 800);
     }
-  }, [selectedFriend, friendCoords]);
+  }, [selectedFriend, friendPins]);
 
   const recenter = useCallback(() => {
-    cameraRef.current?.flyTo(DEFAULT_CENTER, 800);
+    cameraRef.current?.flyTo(mapCenter, 800);
     cameraRef.current?.zoomTo(DEFAULT_ZOOM, 800);
+    fetchNearbyPosts();
+    fetchFriendLocations();
     Toast.show({ type: 'success', text1: t('map.centered') });
-  }, [t]);
+  }, [t, mapCenter, fetchNearbyPosts, fetchFriendLocations]);
 
   return (
     <View style={styles.container}>
@@ -208,7 +332,7 @@ export default function MapScreen({
         />
         <Camera
           ref={cameraRef}
-          centerCoordinate={DEFAULT_CENTER}
+          centerCoordinate={mapCenter}
           zoomLevel={DEFAULT_ZOOM}
           animationMode="flyTo"
           animationDuration={0}
@@ -260,8 +384,42 @@ export default function MapScreen({
           </MarkerView>
         ))}
 
+        {/* Nearby post pins */}
+        {nearbyPosts.map(post => (
+          <MarkerView
+            key={`post-${post.postId}`}
+            coordinate={[post.longitude, post.latitude]}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setSelectedPost(toPostView(post));
+              }}
+              style={styles.postPin}
+            >
+              <View style={[styles.postThumbWrap, Shadows.glow as any]}>
+                {post.thumbnailUrl ? (
+                  <Image
+                    source={{ uri: post.thumbnailUrl }}
+                    style={styles.postThumb}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={styles.postThumbFallback}>
+                    <Ionicons name="image-outline" size={20} color={Colors.primary} />
+                  </View>
+                )}
+              </View>
+              <View style={styles.postNameTag}>
+                <Text style={styles.postName} numberOfLines={1}>{post.displayName}</Text>
+              </View>
+            </TouchableOpacity>
+          </MarkerView>
+        ))}
+
         {/* Friend pins */}
-        {friendCoords.map(f => (
+        {friendPins.map(f => (
           <MarkerView
             key={`friend-${f.id}`}
             coordinate={[f.lng, f.lat]}
@@ -275,7 +433,11 @@ export default function MapScreen({
               style={styles.pin}
             >
               <View style={[styles.pinAvatar, { backgroundColor: f.color }, Shadows.glow as any]}>
-                <Text style={styles.pinEmoji}>{f.emoji}</Text>
+                {f.avatarUrl ? (
+                  <Image source={{ uri: f.avatarUrl }} style={styles.pinAvatarImg} />
+                ) : (
+                  <Text style={styles.pinEmoji}>{f.emoji}</Text>
+                )}
                 {f.status === 'active' && <View style={styles.pinActiveDot} />}
               </View>
               <View style={styles.pinNameTag}>
@@ -392,7 +554,7 @@ export default function MapScreen({
       {/* ── Bottom friend chips ── */}
       <View style={styles.chipWrap}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          {FRIENDS.map(f => (
+          {friendPins.map(f => (
             <TouchableOpacity
               key={f.id}
               onPress={() => {
@@ -402,7 +564,11 @@ export default function MapScreen({
               style={styles.chip}
             >
               <View style={[styles.chipAvatar, { backgroundColor: f.color }]}>
-                <Text style={styles.chipEmoji}>{f.emoji}</Text>
+                {f.avatarUrl ? (
+                  <Image source={{ uri: f.avatarUrl }} style={styles.chipAvatarImg} />
+                ) : (
+                  <Text style={styles.chipEmoji}>{f.emoji}</Text>
+                )}
               </View>
               <View>
                 <Text style={styles.chipName}>{f.name}</Text>
@@ -412,6 +578,14 @@ export default function MapScreen({
           ))}
         </ScrollView>
       </View>
+
+      {/* ── Post detail sheet ── */}
+      {selectedPost && (
+        <PostSheet
+          post={selectedPost}
+          onClose={() => setSelectedPost(null)}
+        />
+      )}
 
       {/* ── Friend detail sheet ── */}
       {selectedFriend && (
@@ -469,6 +643,11 @@ const styles = StyleSheet.create({
   pinEmoji: {
     fontSize: 22,
   },
+  pinAvatarImg: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
   pinActiveDot: {
     position: 'absolute',
     bottom: 0,
@@ -492,6 +671,45 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: Colors.textDark,
+  },
+
+  // ── Post pins ──
+  postPin: {
+    alignItems: 'center',
+  },
+  postThumbWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 12,
+    borderWidth: 3,
+    borderColor: Colors.white,
+    overflow: 'hidden',
+    backgroundColor: Colors.primaryTint,
+  },
+  postThumb: {
+    width: '100%',
+    height: '100%',
+  },
+  postThumbFallback: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.primaryTint,
+  },
+  postNameTag: {
+    marginTop: 4,
+    maxWidth: 72,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    ...Shadows.soft,
+  },
+  postName: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: Colors.textDark,
+    textAlign: 'center',
   },
 
   // ── Ghost / incognito pin ──
@@ -654,6 +872,11 @@ const styles = StyleSheet.create({
   },
   chipEmoji: {
     fontSize: 14,
+  },
+  chipAvatarImg: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
   },
   chipName: {
     fontSize: 12,

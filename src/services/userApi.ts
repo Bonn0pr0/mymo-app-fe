@@ -109,10 +109,32 @@ export async function updateUserSettings(payload: UserSettingsPayload): Promise<
   await requestJson<ApiResponse<null>>('/users/settings', 'PATCH', payload);
 }
 
-export async function uploadUserAvatar(file: FormData): Promise<void> {
-  await requestJson<ApiResponse<null>>('/users/avatar', 'PUT', file, true);
+export async function updateUserLocation(
+  latitude: number | null,
+  longitude: number | null,
+): Promise<void> {
+  try {
+    await requestJson<ApiResponse<boolean>>('/users/location', 'PUT', {
+      latitude,
+      longitude,
+    });
+  } catch {
+    // Endpoint may not be deployed yet — ignore silently
+  }
 }
 
-export async function uploadUserCover(file: FormData): Promise<void> {
-  await requestJson<ApiResponse<null>>('/users/cover', 'PUT', file, true);
+export async function uploadUserAvatar(file: FormData): Promise<string> {
+  const response = await requestJson<ApiResponse<string>>('/users/avatar', 'PUT', file, true);
+  if (!response.success) {
+    throw new Error(response.message || 'Failed to upload avatar');
+  }
+  return response.data;
+}
+
+export async function uploadUserCover(file: FormData): Promise<string> {
+  const response = await requestJson<ApiResponse<string>>('/users/cover', 'PUT', file, true);
+  if (!response.success) {
+    throw new Error(response.message || 'Failed to upload cover');
+  }
+  return response.data;
 }

@@ -49,6 +49,9 @@ export interface NotificationItem {
   title?: string;
   body?: string;
   createdAt?: string;
+  isRead?: boolean;
+  senderId?: string;
+  referenceId?: string | null;
 }
 
 interface RawNotificationItem {
@@ -62,35 +65,43 @@ interface RawNotificationItem {
   createdAt?: string;
 }
 
+function mapNotificationType(rawType: string, title?: string, content?: string): string {
+  const type = rawType.toLowerCase();
+  const text = `${title || ''} ${content || ''}`.toLowerCase();
+
+  if (type.includes('friendrequest') || type.includes('friend_request')) {
+    if (text.includes('accepted') || text.includes('đồng ý')) return 'friend_accepted';
+    if (text.includes('rejected') || text.includes('declined') || text.includes('từ chối')) return 'friend_rejected';
+    if (/sent you|has sent|friend request/.test(text)) return 'request';
+    return 'info';
+  }
+
+  if (type.includes('like')) return 'like';
+  return 'info';
+}
+
+function extractSenderName(title?: string, content?: string): string | null {
+  const text = content || title || '';
+  const match = text.match(/^(.+?)\s+(sent you|accepted your|declined your)/i);
+  return match?.[1]?.trim() || null;
+}
+
 export async function getNotifications(): Promise<NotificationItem[]> {
   const res = await requestJson<ApiResponse<RawNotificationItem[]>>('/notifications', 'GET');
   return (res.data || []).map(item => {
-    const rawType = item.type ? item.type.toLowerCase() : 'info';
-    const content = (item.content || item.title || '').toLowerCase();
-
-    // Only treat server-side FriendRequest notifications as actionable 'request' when
-    // the content clearly indicates a new incoming request (e.g. "sent you a friend request").
-    let mappedType = rawType;
-    if (rawType.includes('friendrequest') || rawType.includes('friend_request')) {
-      const isAccepted = content.includes('accept') || content.includes('accepted') || content.includes('was accepted');
-      const isIncoming = /sent you|has sent|someone sent|new friend request|friend request to you/.test(content + ' ' + (item.title || ''));
-      if (isIncoming && !isAccepted) {
-        mappedType = 'request';
-      } else {
-        mappedType = 'info';
-      }
-    }
+    const mappedType = mapNotificationType(item.type, item.title, item.content);
+    const senderName = extractSenderName(item.title, item.content);
 
     return {
       id: item.notificationId,
       type: mappedType,
-      title: item.title,
-      body: item.content,
+      title: senderName || item.title,
+      body: item.content || item.title,
       createdAt: item.createdAt,
       isRead: item.isRead,
       senderId: item.senderId,
       referenceId: item.referenceId,
-    } as NotificationItem & { isRead?: boolean; senderId?: string; referenceId?: string | null };
+    };
   });
 }
 

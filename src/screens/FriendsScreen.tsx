@@ -21,8 +21,13 @@ import {
   getFriendRequests,
   getSentRequests,
   requestFriend,
+  acceptFriend,
+  rejectFriend,
   type FriendSummary,
+  type PendingFriendRequest,
 } from '../services/friendsApi';
+import FriendMomentsSection from '../components/FriendMomentsSection';
+import FriendRequestsSection from '../components/FriendRequestsSection';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -72,7 +77,7 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
   const [query, setQuery] = useState('');
   const [friends, setFriends] = useState<FriendSummary[]>([]);
   const [suggestions, setSuggestions] = useState<FriendSummary[]>([]);
-  const [friendRequests, setFriendRequests] = useState<FriendSummary[]>([]);
+  const [friendRequests, setFriendRequests] = useState<PendingFriendRequest[]>([]);
   const [sentRequests, setSentRequests] = useState<FriendSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -117,6 +122,13 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
   };
 
   const friendsWithStatus = friends.map(mapFriendSummary);
+  const friendLookup = React.useMemo(() => {
+    const map: Record<string, { name: string; avatar?: string | null }> = {};
+    friendsWithStatus.forEach(f => {
+      map[f.id] = { name: f.name, avatar: f.avatar };
+    });
+    return map;
+  }, [friendsWithStatus]);
   const filteredFriends = friendsWithStatus.filter(f =>
     f.name.toLowerCase().includes(query.toLowerCase())
   );
@@ -215,11 +227,38 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
     const sub2 = DeviceEventEmitter.addListener('friends:refetch', () => {
       fetchFriendData();
     });
+    const sub3 = DeviceEventEmitter.addListener('friend:requested', () => {
+      fetchFriendData();
+    });
     return () => {
       sub.remove();
       sub2.remove();
+      sub3.remove();
     };
   }, []);
+
+  const handleAcceptRequest = async (request: PendingFriendRequest) => {
+    try {
+      await acceptFriend(request.userId);
+      setFriendRequests(prev => prev.filter(r => r.userId !== request.userId));
+      DeviceEventEmitter.emit('friend:accepted', { userId: request.userId });
+      DeviceEventEmitter.emit('friends:refetch');
+      await fetchFriendData();
+      Toast.show({ type: 'success', text1: `${request.displayName} ${t('friends.nowFriend')}` });
+    } catch (error) {
+      Toast.show({ type: 'error', text1: String(error instanceof Error ? error.message : 'Unable to accept') });
+    }
+  };
+
+  const handleRejectRequest = async (request: PendingFriendRequest) => {
+    try {
+      await rejectFriend(request.userId);
+      setFriendRequests(prev => prev.filter(r => r.userId !== request.userId));
+      Toast.show({ type: 'info', text1: `${t('friends.dismissed')} ${request.displayName}` });
+    } catch (error) {
+      Toast.show({ type: 'error', text1: String(error instanceof Error ? error.message : 'Unable to reject') });
+    }
+  };
 
   const grads = [
     ['#9C7CFF', '#7C5BFF'], // Purple
@@ -268,8 +307,14 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={() => (
-          <View style={styles.storyTrayWrap}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyTray}>
+          <View>
+            <FriendRequestsSection
+              requests={friendRequests}
+              onAccept={handleAcceptRequest}
+              onReject={handleRejectRequest}
+            />
+            <View style={styles.storyTrayWrap}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyTray}>
               {/* Add Story Button (Your Story) */}
               <View style={styles.storyCol}>
                 <TouchableOpacity
@@ -328,6 +373,8 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
                 );
               })}
             </ScrollView>
+            </View>
+            <FriendMomentsSection friendNames={friendLookup} />
           </View>
         )}
         renderItem={({ item: f }) => (

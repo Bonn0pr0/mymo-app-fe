@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import {
   View, Text, Modal, TouchableOpacity, StyleSheet, Animated,
-  ScrollView, TextInput, KeyboardAvoidingView, Platform,
+  ScrollView, TextInput, KeyboardAvoidingView, Platform, DeviceEventEmitter,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -79,7 +79,8 @@ export default function AddFriendSheet({ onClose }: AddFriendSheetProps) {
     setIsSubmitting(true);
     try {
       await requestFriend(userId);
-      Toast.show({ type: 'success', text1: `${t('addFriend.sent')} @${userId}` });
+      DeviceEventEmitter.emit('friend:requested', { userId });
+      Toast.show({ type: 'success', text1: t('addFriend.sent'), text2: t('addFriend.sentDesc') });
       setLink('');
       close();
     } catch (error) {
