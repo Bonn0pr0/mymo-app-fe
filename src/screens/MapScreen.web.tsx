@@ -13,7 +13,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Gradients, Shadows } from '../constants/colors';
 import { useI18n } from '../i18n';
 import type { Friend } from '../constants/data';
-import { VIBE_SPOTS } from '../constants/data';
 import FriendSheet from '../components/FriendSheet';
 import PostSheet from '../components/PostSheet';
 import PlaceSheet from '../components/PlaceSheet';
@@ -99,13 +98,6 @@ const MYMO_STYLE: mapboxgl.Style = {
   ],
 };
 
-// ─── Compute vibe spot coords around default center ───────────────────────────
-const vibeCoords = VIBE_SPOTS.map(s => ({
-  ...s,
-  lng: DEFAULT_CENTER[0] + (s.x - 50) * 0.0008,
-  lat: DEFAULT_CENTER[1] + (50 - s.y) * 0.0006,
-}));
-
 // ─── Props ────────────────────────────────────────────────────────────────────
 interface MapScreenProps {
   locationGranted: boolean;
@@ -168,14 +160,23 @@ function createFriendMarkerEl(friend: MapFriendPin, onTap: () => void): HTMLDivE
 
 function createPlaceMarkerEl(place: PlaceSummary, onTap: () => void): HTMLDivElement {
   const el = document.createElement('div');
-  el.style.cssText = 'display:flex; flex-direction:column; align-items:center; cursor:pointer; z-index:4;';
+  el.style.cssText = 'display:flex; flex-direction:column; align-items:center; cursor:pointer; z-index:4; max-width:110px;';
 
-  const iconWrap = document.createElement('div');
-  iconWrap.style.cssText = `
-    width:48px; height:48px; border-radius:14px;
-    border:3px solid #F59E0B; background:#FEF3C7;
+  const bubble = document.createElement('div');
+  bubble.style.cssText = `
+    width:44px; height:44px; border-radius:50%;
+    background:linear-gradient(135deg, #9C7CFF, #7C5BFF);
+    border:2.5px solid #fff;
     display:flex; align-items:center; justify-content:center;
-    box-shadow:0 4px 16px rgba(245,158,11,0.45); overflow:hidden;
+    box-shadow:0 4px 16px rgba(124,91,255,0.45);
+  `;
+
+  const inner = document.createElement('div');
+  inner.style.cssText = `
+    width:34px; height:34px; border-radius:50%;
+    background:#fff; overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+    font-size:16px;
   `;
 
   if (place.thumbnailUrl) {
@@ -183,26 +184,54 @@ function createPlaceMarkerEl(place: PlaceSummary, onTap: () => void): HTMLDivEle
     img.src = place.thumbnailUrl;
     img.alt = place.name;
     img.style.cssText = 'width:100%; height:100%; object-fit:cover; display:block;';
-    iconWrap.appendChild(img);
+    inner.appendChild(img);
   } else {
-    iconWrap.textContent = '🏪';
-    iconWrap.style.fontSize = '20px';
+    inner.textContent = '📍';
   }
 
-  const nameTag = document.createElement('div');
-  nameTag.style.cssText = `
-    margin-top:4px; max-width:90px; background:rgba(255,255,255,0.95);
-    padding:3px 8px; border-radius:10px;
-    font-size:9px; font-weight:700; color:#2A1758;
-    box-shadow:0 2px 8px rgba(124,91,255,0.12);
-    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center;
-  `;
-  nameTag.textContent = place.averageRating && place.averageRating > 0
-    ? `${place.name} ⭐${place.averageRating.toFixed(1)}`
-    : place.name;
+  bubble.appendChild(inner);
 
-  el.appendChild(iconWrap);
-  el.appendChild(nameTag);
+  const tip = document.createElement('div');
+  tip.style.cssText = `
+    width:0; height:0; margin-top:-1px;
+    border-left:7px solid transparent;
+    border-right:7px solid transparent;
+    border-top:9px solid #7C5BFF;
+  `;
+
+  const chip = document.createElement('div');
+  chip.style.cssText = `
+    margin-top:4px; max-width:108px;
+    display:flex; align-items:center; gap:4px;
+    background:rgba(255,255,255,0.96);
+    padding:5px 8px; border-radius:12px;
+    border:1px solid #E8DFFF;
+    box-shadow:0 2px 8px rgba(124,91,255,0.12);
+  `;
+
+  const name = document.createElement('span');
+  name.style.cssText = `
+    font-size:9px; font-weight:800; color:#2A1758;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    flex:1; min-width:0;
+  `;
+  name.textContent = place.name;
+  chip.appendChild(name);
+
+  if (place.averageRating && place.averageRating > 0) {
+    const rating = document.createElement('span');
+    rating.style.cssText = `
+      font-size:8px; font-weight:800; color:#4E3A87;
+      background:#F6F2FF; padding:2px 5px; border-radius:8px;
+      white-space:nowrap; flex-shrink:0;
+    `;
+    rating.textContent = `★ ${place.averageRating.toFixed(1)}`;
+    chip.appendChild(rating);
+  }
+
+  el.appendChild(bubble);
+  el.appendChild(tip);
+  el.appendChild(chip);
   el.addEventListener('click', onTap);
   return el;
 }
@@ -253,7 +282,6 @@ export default function MapScreen({
   onFriendTap, selectedFriend, onCloseSheet, onMessage,
 }: MapScreenProps) {
   const { t } = useI18n();
-  const [showHeat, setShowHeat] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [cssLoaded, setCssLoaded] = useState(false);
   const [mapTheme, setMapTheme] = useState<'purple' | 'yellow'>('purple');
@@ -267,7 +295,6 @@ export default function MapScreen({
 
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
-  const heatMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const postMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const placeMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -483,35 +510,6 @@ export default function MapScreen({
         map.resize();
       }, 150);
 
-      // ── Vibe heatmap markers ────────────────────────────────────────────
-      vibeCoords.forEach(s => {
-        const size = s.r * 5;
-        const el = document.createElement('div');
-        const color = s.vibe === 'hot'
-          ? `rgba(255,61,110,${s.intensity * 0.4})`
-          : `rgba(124,91,255,${s.intensity * 0.35})`;
-        el.style.cssText = `
-          width:${size}px; height:${size}px; border-radius:50%;
-          background:${color}; pointer-events:none;
-        `;
-        const blobMarker = new mapboxgl.Marker({ element: el, anchor: 'center' })
-          .setLngLat([s.lng, s.lat])
-          .addTo(map);
-
-        const labelEl = document.createElement('div');
-        labelEl.style.cssText = `
-          background:rgba(255,255,255,0.92); padding:2px 7px; border-radius:10px;
-          font-size:9px; font-weight:700; color:#2A1758; white-space:nowrap;
-          pointer-events:none; box-shadow:0 2px 8px rgba(124,91,255,0.12);
-        `;
-        labelEl.textContent = `${s.emoji} ${s.label}`;
-        const labelMarker = new mapboxgl.Marker({ element: labelEl, anchor: 'bottom' })
-          .setLngLat([s.lng, s.lat])
-          .addTo(map);
-
-        heatMarkersRef.current.push(blobMarker, labelMarker);
-      });
-
       // ── My location marker ──────────────────────────────────────────────
       const myEl = document.createElement('div');
       myEl.style.cssText = `
@@ -537,7 +535,6 @@ export default function MapScreen({
       map.remove();
       mapRef.current = null;
       markersRef.current = [];
-      heatMarkersRef.current = [];
       postMarkersRef.current = [];
       placeMarkersRef.current.forEach(m => m.remove());
       placeMarkersRef.current = [];
@@ -634,14 +631,6 @@ export default function MapScreen({
     el.style.display = visibleOnMap ? 'flex' : 'none';
   }, [visibleOnMap]);
 
-  // ── Show/hide heat blobs ────────────────────────────────────────────────────
-  useEffect(() => {
-    heatMarkersRef.current.forEach(m => {
-      const el = m.getElement() as HTMLElement;
-      el.style.display = showHeat ? '' : 'none';
-    });
-  }, [showHeat]);
-
   // ── Fly to selected friend ───────────────────────────────────────────────
   useEffect(() => {
     if (!selectedFriend || !mapRef.current) return;
@@ -707,20 +696,6 @@ export default function MapScreen({
           </View>
           <TouchableOpacity
             onPress={() => {
-              setShowHeat(v => !v);
-              Toast.show({ type: 'info', text1: showHeat ? t('map.vibeOff') : t('map.vibeOn') });
-            }}
-            style={[styles.mapBtn, showHeat && styles.mapBtnActive]}
-          >
-            {showHeat
-              ? <LinearGradient colors={Gradients.primary} style={styles.mapBtnGrad}>
-                  <Ionicons name="flame" size={18} color={Colors.white} />
-                </LinearGradient>
-              : <Ionicons name="flame-outline" size={18} color={Colors.primary} />
-            }
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
               const nextTheme = mapTheme === 'purple' ? 'yellow' : 'purple';
               setMapTheme(nextTheme);
               Toast.show({
@@ -746,19 +721,6 @@ export default function MapScreen({
           </View>
         )}
 
-        {showHeat && (
-          <View style={styles.legendRow}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.heatHot }]} />
-              <Text style={styles.legendText}>{t('map.lively')}</Text>
-            </View>
-            <View style={styles.legendSep} />
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.heatCalm }]} />
-              <Text style={styles.legendText}>{t('map.calm')}</Text>
-            </View>
-          </View>
-        )}
       </View>
 
       {/* ── Right zoom / locate controls ── */}
@@ -944,37 +906,6 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 10,
     fontWeight: '700',
-  },
-  legendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    alignSelf: 'flex-start',
-    gap: 8,
-    ...Shadows.soft,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  legendText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.textDark,
-  },
-  legendSep: {
-    width: 1,
-    height: 12,
-    backgroundColor: Colors.primarySoft,
   },
   rightControls: {
     position: 'absolute',

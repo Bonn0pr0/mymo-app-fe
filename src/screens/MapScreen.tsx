@@ -10,7 +10,6 @@ import * as Location from 'expo-location';
 import { Colors, Gradients, Shadows } from '../constants/colors';
 import { useI18n } from '../i18n';
 import type { Friend } from '../constants/data';
-import { VIBE_SPOTS } from '../constants/data';
 import FriendSheet from '../components/FriendSheet';
 import PostSheet from '../components/PostSheet';
 import PlaceSheet from '../components/PlaceSheet';
@@ -142,7 +141,6 @@ export default function MapScreen({
   onFriendTap, selectedFriend, onCloseSheet, onMessage,
 }: MapScreenProps) {
   const { t } = useI18n();
-  const [showHeat, setShowHeat] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [mapTheme, setMapTheme] = useState<'purple' | 'yellow'>('purple');
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -153,13 +151,6 @@ export default function MapScreen({
   const [friendPins, setFriendPins] = useState<MapFriendPin[]>([]);
   const cameraRef = useRef<Camera>(null);
   const hasFittedPostsRef = useRef(false);
-
-  // Vibe blob coords
-  const vibeCoords = React.useMemo(() => VIBE_SPOTS.map(s => ({
-    ...s,
-    lng: DEFAULT_CENTER[0] + (s.x - 50) * 0.0008,
-    lat: DEFAULT_CENTER[1] + (50 - s.y) * 0.0006,
-  })), []);
 
   // ── User location ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -380,43 +371,6 @@ export default function MapScreen({
           />
         )}
 
-        {/* Vibe heatmap blobs as MarkerViews */}
-        {showHeat && vibeCoords.map(s => (
-          <MarkerView
-            key={`vibe-${s.id}`}
-            coordinate={[s.lng, s.lat]}
-            anchor={{ x: 0.5, y: 0.5 }}
-          >
-            <View
-              pointerEvents="none"
-              style={[
-                styles.heatBlob,
-                {
-                  width: s.r * 5,
-                  height: s.r * 5,
-                  borderRadius: s.r * 2.5,
-                  backgroundColor: s.vibe === 'hot'
-                    ? `rgba(255,61,110,${s.intensity * 0.4})`
-                    : `rgba(124,91,255,${s.intensity * 0.35})`,
-                },
-              ]}
-            />
-          </MarkerView>
-        ))}
-
-        {/* Vibe labels */}
-        {showHeat && vibeCoords.map(s => (
-          <MarkerView
-            key={`vibe-lbl-${s.id}`}
-            coordinate={[s.lng, s.lat]}
-            anchor={{ x: 0.5, y: 0.5 }}
-          >
-            <View pointerEvents="none" style={[styles.vibeLabelWrap, { transform: [{ translateY: 26 }] }]}>
-              <Text style={styles.vibeLabelText}>{s.emoji} {s.label}</Text>
-            </View>
-          </MarkerView>
-        ))}
-
         {/* Nearby place pins */}
         {filteredPlaces.map(place => (
           <MarkerView
@@ -431,18 +385,30 @@ export default function MapScreen({
                 setSelectedPlace(place);
               }}
               style={styles.placePin}
+              activeOpacity={0.88}
             >
-              <View style={[styles.placePinIcon, Shadows.glow as any]}>
-                {place.thumbnailUrl ? (
-                  <Image source={{ uri: place.thumbnailUrl }} style={styles.placePinImg} />
-                ) : (
-                  <Ionicons name="storefront" size={20} color="#F59E0B" />
-                )}
-              </View>
-              <View style={styles.placeNameTag}>
-                <Text style={styles.placePinName} numberOfLines={1}>{place.name}</Text>
+              <LinearGradient
+                colors={Gradients.primary}
+                style={styles.placePinBubble}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+              >
+                <View style={styles.placePinInner}>
+                  {place.thumbnailUrl ? (
+                    <Image source={{ uri: place.thumbnailUrl }} style={styles.placePinImg} />
+                  ) : (
+                    <Ionicons name="location" size={18} color={Colors.primary} />
+                  )}
+                </View>
+              </LinearGradient>
+              <View style={styles.placePinTip} />
+              <View style={styles.placeChip}>
+                <Text style={styles.placeChipName} numberOfLines={1}>{place.name}</Text>
                 {place.averageRating != null && place.averageRating > 0 && (
-                  <Text style={styles.placePinRating}>⭐ {place.averageRating.toFixed(1)}</Text>
+                  <View style={styles.placeRatingPill}>
+                    <Ionicons name="star" size={9} color="#F59E0B" />
+                    <Text style={styles.placeRatingText}>{place.averageRating.toFixed(1)}</Text>
+                  </View>
                 )}
               </View>
             </TouchableOpacity>
@@ -542,18 +508,6 @@ export default function MapScreen({
           </View>
           <TouchableOpacity
             onPress={() => {
-              setShowHeat(v => !v);
-              Toast.show({ type: 'info', text1: showHeat ? t('map.vibeOff') : t('map.vibeOn') });
-            }}
-            style={[styles.mapBtn, showHeat && styles.mapBtnActive]}
-          >
-            {showHeat
-              ? <LinearGradient colors={Gradients.primary} style={styles.mapBtnGrad}><Ionicons name="flame" size={18} color={Colors.white} /></LinearGradient>
-              : <Ionicons name="flame-outline" size={18} color={Colors.primary} />
-            }
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
               const nextTheme = mapTheme === 'purple' ? 'yellow' : 'purple';
               setMapTheme(nextTheme);
               Toast.show({
@@ -579,19 +533,6 @@ export default function MapScreen({
           </View>
         )}
 
-        {showHeat && (
-          <View style={styles.legendRow}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.heatHot }]} />
-              <Text style={styles.legendText}>{t('map.lively')}</Text>
-            </View>
-            <View style={styles.legendSep} />
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.heatCalm }]} />
-              <Text style={styles.legendText}>{t('map.calm')}</Text>
-            </View>
-          </View>
-        )}
       </View>
 
       {/* ── Right zoom / locate controls ── */}
@@ -689,23 +630,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
   },
 
-  // ── Vibe heatmap blobs ──
-  heatBlob: {
-    // sizing done inline
-  },
-  vibeLabelWrap: {
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 10,
-    ...Shadows.soft,
-  },
-  vibeLabelText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: Colors.textDark,
-  },
-
   // ── Friend pins ──
   pin: {
     alignItems: 'center',
@@ -794,14 +718,23 @@ const styles = StyleSheet.create({
   // ── Place pins ──
   placePin: {
     alignItems: 'center',
+    maxWidth: 110,
   },
-  placePinIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    borderWidth: 3,
-    borderColor: '#F59E0B',
-    backgroundColor: '#FEF3C7',
+  placePinBubble: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2.5,
+    borderColor: Colors.white,
+    ...Shadows.glow,
+  },
+  placePinInner: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: Colors.white,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -810,26 +743,50 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  placeNameTag: {
+  placePinTip: {
+    width: 0,
+    height: 0,
+    marginTop: -1,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderTopWidth: 9,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: Colors.primary,
+  },
+  placeChip: {
     marginTop: 4,
-    maxWidth: 90,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 4,
+    maxWidth: 108,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.primarySoft,
     ...Shadows.soft,
   },
-  placePinName: {
+  placeChipName: {
+    flexShrink: 1,
     fontSize: 9,
-    fontWeight: '700',
+    fontWeight: '800',
     color: Colors.textDark,
-    textAlign: 'center',
   },
-  placePinRating: {
+  placeRatingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: Colors.primaryTint,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  placeRatingText: {
     fontSize: 8,
-    color: Colors.textMuted,
-    marginTop: 1,
+    fontWeight: '800',
+    color: Colors.textMid,
   },
 
   // ── Ghost / incognito pin ──
@@ -916,37 +873,6 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 10,
     fontWeight: '700',
-  },
-  legendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    alignSelf: 'flex-start',
-    gap: 8,
-    ...Shadows.soft,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  legendText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.textDark,
-  },
-  legendSep: {
-    width: 1,
-    height: 12,
-    backgroundColor: Colors.primarySoft,
   },
   rightControls: {
     position: 'absolute',
