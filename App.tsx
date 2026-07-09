@@ -19,6 +19,7 @@ import NotificationsScreen from './src/screens/NotificationsScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import CameraSheet from './src/components/CameraSheet';
 import ChatScreen from './src/components/ChatScreen';
+import type { OpenChatParams } from './src/components/ConversationsSection';
 import AddFriendSheet from './src/components/AddFriendSheet';
 import PostSheet from './src/components/PostSheet';
 import { LocationPermSheet, EnableLocationModal } from './src/components/LocationPermSheet';
@@ -26,6 +27,14 @@ import type { PostView } from './src/services/postApi';
 
 type Screen = 'auth' | 'app';
 type Tab = 'map' | 'friends' | 'notifications' | 'profile';
+
+type ChatSession = {
+  conversationId: string;
+  title: string;
+  avatarUrl?: string | null;
+  sharePostId?: string;
+  sharePlaceId?: string;
+} | null;
 
 export default function App() {
   useEffect(() => {
@@ -77,7 +86,7 @@ function AppInner() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [locationPromptOpen, setLocationPromptOpen] = useState(false);
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
-  const [chatWith, setChatWith] = useState<Friend | null>(null);
+  const [chatSession, setChatSession] = useState<ChatSession>(null);
   const [addFriendOpen, setAddFriendOpen] = useState(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   const [notifPost, setNotifPost] = useState<PostView | null>(null);
@@ -128,13 +137,50 @@ function AppInner() {
 
   const visibleOnMap = !!locationGranted && !incognito;
 
+  const handleOpenChat = async (params: OpenChatParams & { sharePostId?: string; sharePlaceId?: string }) => {
+    try {
+      const { createPrivateConversation } = await import('./src/services/chatApi');
+      let conversationId = params.conversationId;
+      if (!conversationId && params.userId) {
+        const conv = await createPrivateConversation(params.userId);
+        conversationId = conv.conversationId;
+      }
+      if (!conversationId) return;
+
+      setChatSession({
+        conversationId,
+        title: params.title,
+        avatarUrl: params.avatarUrl,
+        sharePostId: params.sharePostId,
+        sharePlaceId: params.sharePlaceId,
+      });
+    } catch (err) {
+      Toast.show({
+        type: 'error',
+        text1: String(err instanceof Error ? err.message : t('chat.openError')),
+      });
+    }
+  };
+
   if (screen === 'auth') {
     return <AuthScreen onContinue={() => setScreen('app')} />;
   }
 
   // Chat screen takes full screen
-  if (chatWith) {
-    return <ChatScreen friend={chatWith} onClose={() => setChatWith(null)} />;
+  if (chatSession) {
+    return (
+      <ChatScreen
+        conversationId={chatSession.conversationId}
+        title={chatSession.title}
+        avatarUrl={chatSession.avatarUrl}
+        sharePostId={chatSession.sharePostId}
+        sharePlaceId={chatSession.sharePlaceId}
+        onClose={() => {
+          setChatSession(null);
+          DeviceEventEmitter.emit('chat:refresh');
+        }}
+      />
+    );
   }
 
   return (
@@ -150,13 +196,13 @@ function AppInner() {
             onFriendTap={setSelectedFriend}
             selectedFriend={selectedFriend}
             onCloseSheet={() => setSelectedFriend(null)}
-            onMessage={f => { setSelectedFriend(null); setChatWith(f); }}
+            onMessage={f => { setSelectedFriend(null); handleOpenChat({ userId: f.id, title: f.name }); }}
           />
         )}
         {tab === 'friends' && (
           <FriendsScreen
             onFriendTap={setSelectedFriend}
-            onChat={setChatWith}
+            onOpenChat={handleOpenChat}
             onAdd={() => setAddFriendOpen(true)}
           />
         )}
@@ -172,6 +218,9 @@ function AppInner() {
                 likeCount: 0,
                 commentCount: 0,
               });
+            }}
+            onOpenChat={(conversationId, title, avatarUrl) => {
+              handleOpenChat({ conversationId, title, avatarUrl });
             }}
           />
         )}

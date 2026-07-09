@@ -49,6 +49,7 @@ export type NotificationUiType =
   | 'friend_rejected'
   | 'like'
   | 'comment'
+  | 'chat'
   | 'info';
 
 export interface NotificationSender {
@@ -69,6 +70,7 @@ export interface NotificationItem {
   avatarUrl?: string | null;
   referenceId?: string | null;
   postId?: string | null;
+  conversationId?: string | null;
   groupIds?: string[];
   senders?: NotificationSender[];
   isGrouped?: boolean;
@@ -100,6 +102,7 @@ function mapNotificationType(rawType: string, title?: string, content?: string):
   if (type === 'friendaccepted' || type.includes('friend_accepted')) return 'friend_accepted';
   if (type === 'postliked' || type === 'like' || type.includes('postliked')) return 'like';
   if (type === 'postcommented' || type === 'comment' || type.includes('postcommented')) return 'comment';
+  if (type === 'chatmessage' || type.includes('chatmessage') || type.includes('chat_message')) return 'chat';
 
   if (type.includes('friendrequest') || type.includes('friend_request')) {
     if (text.includes('accepted') || text.includes('đồng ý')) return 'friend_accepted';
@@ -133,6 +136,7 @@ export async function getNotifications(): Promise<NotificationItem[]> {
     const senderId = item.sender?.userId || item.senderId;
     const senderName = extractSenderName(item.sender, senderId, item.title, item.content);
     const isPostRelated = mappedType === 'like' || mappedType === 'comment';
+    const isChat = mappedType === 'chat';
 
     return {
       id: item.notificationId,
@@ -146,6 +150,7 @@ export async function getNotifications(): Promise<NotificationItem[]> {
       avatarUrl: item.sender?.avatarUrl ?? null,
       referenceId: item.referenceId,
       postId: isPostRelated ? (item.referenceId || null) : null,
+      conversationId: isChat ? (item.referenceId || null) : null,
     };
   });
 }

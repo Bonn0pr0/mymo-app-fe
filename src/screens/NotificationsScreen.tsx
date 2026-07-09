@@ -36,7 +36,7 @@ type NotifFilter = 'all' | 'requests' | 'likes';
 
 interface ScreenItem {
   id: string;
-  type: 'request' | 'friend_accepted' | 'friend_rejected' | 'like' | 'comment' | 'info';
+  type: 'request' | 'friend_accepted' | 'friend_rejected' | 'like' | 'comment' | 'chat' | 'info';
   who: string;
   textKey: string;
   body?: string;
@@ -49,6 +49,7 @@ interface ScreenItem {
   notificationId?: string;
   groupIds?: string[];
   postId?: string | null;
+  conversationId?: string | null;
   isRead?: boolean;
 }
 
@@ -56,6 +57,7 @@ interface NotificationsScreenProps {
   isActive?: boolean;
   onUnreadCountChange?: (count: number) => void;
   onOpenPost?: (postId: string) => void;
+  onOpenChat?: (conversationId: string, title: string, avatarUrl?: string | null) => void;
 }
 
 function isActivityType(type: ScreenItem['type']): boolean {
@@ -76,6 +78,7 @@ export default function NotificationsScreen({
   isActive = true,
   onUnreadCountChange,
   onOpenPost,
+  onOpenChat,
 }: NotificationsScreenProps) {
   const { t, lang } = useI18n();
   const insets = useSafeAreaInsets();
@@ -212,6 +215,24 @@ export default function NotificationsScreen({
     onOpenPost(item.postId);
   };
 
+  const handleOpenChat = async (item: ScreenItem) => {
+    if (!item.conversationId || !onOpenChat) return;
+
+    const idsToMark = item.groupIds?.length ? item.groupIds : (item.notificationId ? [item.notificationId] : []);
+    const hasUnread = !item.isRead;
+
+    if (hasUnread && idsToMark.length > 0) {
+      await Promise.all(idsToMark.map(id => markAsRead(id).catch(() => false)));
+      setNotifications(prev =>
+        prev.map(n => (idsToMark.includes(n.id) ? { ...n, isRead: true } : n)),
+      );
+      const uc = await getUnreadCount().catch(() => 0);
+      onUnreadCountChange?.(uc);
+    }
+
+    onOpenChat(item.conversationId, item.who, item.avatarUrl);
+  };
+
   const requestIds = new Set(friendRequests.map(r => r.userId));
 
   const groupedNotifications = useMemo(
@@ -242,6 +263,8 @@ export default function NotificationsScreen({
         ? 'notif.text.like'
         : nt.type === 'comment'
         ? 'notif.text.comment'
+        : nt.type === 'chat'
+        ? 'notif.text.chat'
         : 'notif.text.generic',
       body: nt.body,
       time: nt.createdAt ? new Date(nt.createdAt).toLocaleString() : t('common.now'),
@@ -253,6 +276,7 @@ export default function NotificationsScreen({
       notificationId: nt.id,
       groupIds: nt.groupIds,
       postId: nt.postId,
+      conversationId: nt.conversationId,
       isRead: nt.isRead,
     }));
 
@@ -380,7 +404,8 @@ export default function NotificationsScreen({
           <NotifItem
             item={item}
             onPress={() => {
-              if (isActivityType(item.type)) handleOpenPost(item);
+              if (item.type === 'chat') handleOpenChat(item);
+              else if (isActivityType(item.type)) handleOpenPost(item);
             }}
             onAccept={() => {
               if (!item.requesterId) return;
@@ -410,8 +435,9 @@ function NotifItem({
 }) {
   const { t } = useI18n();
   const fallbackAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop';
-  const isTappable = isActivityType(item.type) && !!item.postId;
-  const showBody = item.body && (item.type === 'like' || item.type === 'comment' || item.type === 'info' || item.isGrouped);
+  const isTappable = (item.type === 'chat' && !!item.conversationId)
+    || (isActivityType(item.type) && !!item.postId);
+  const showBody = item.body && (item.type === 'like' || item.type === 'comment' || item.type === 'chat' || item.type === 'info' || item.isGrouped);
   const extraCount = item.isGrouped && item.count && item.count > 2 ? item.count - 2 : 0;
 
   const content = (
@@ -450,6 +476,8 @@ function NotifItem({
                 ? '❤️'
                 : item.type === 'comment'
                 ? '💬'
+                : item.type === 'chat'
+                ? '💌'
                 : '🔔'}
             </Text>
           </View>

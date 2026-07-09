@@ -22,7 +22,9 @@ import { changeUserPassword, getUserProfile, uploadUserAvatar, uploadUserCover, 
 import { getMyPosts, toPostView, type FeedPost, type PostView } from '../services/postApi';
 import ProfileMomentsGrid from '../components/ProfileMomentsGrid';
 import PostSheet from '../components/PostSheet';
+import PremiumScreen from './PremiumScreen';
 import Toast from 'react-native-toast-message';
+import { getPremiumPlan, isPremiumActive, type PremiumPlanId } from '../utils/premiumStorage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SW } = Dimensions.get('window');
@@ -72,6 +74,8 @@ export default function ProfileScreen({
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [myPosts, setMyPosts] = useState<FeedPost[]>([]);
   const [selectedPost, setSelectedPost] = useState<PostView | null>(null);
+  const [premiumOpen, setPremiumOpen] = useState(false);
+  const [premiumPlan, setPremiumPlan] = useState<PremiumPlanId>('free');
   const settingsRef = useRef<ScrollView>(null);
 
   const profileLink = profile ? `mymo.app/u/${profile.id}` : '';
@@ -135,6 +139,10 @@ export default function ProfileScreen({
     if (!isActive) return;
     refreshAll();
   }, [isActive, refreshAll]);
+
+  useEffect(() => {
+    getPremiumPlan().then(setPremiumPlan).catch(() => {});
+  }, [premiumOpen]);
 
   const copyProfileLink = async () => {
     if (!profileLink) return;
@@ -805,17 +813,23 @@ export default function ProfileScreen({
         />
         <SettingRow
           icon="sparkles"
-          label={t('profile.getPlus')}
+          label={isPremiumActive(premiumPlan) ? t('profile.plusActive') : t('profile.getPlus')}
           right={
-            <View style={styles.tryBadge}>
-              <LinearGradient colors={Gradients.primary as any} style={styles.tryBadgeGrad}>
-                <Text style={styles.tryBadgeText}>{t('common.try')}</Text>
-              </LinearGradient>
-            </View>
+            isPremiumActive(premiumPlan) ? (
+              <View style={styles.plusActiveBadge}>
+                <Ionicons name="checkmark-circle" size={16} color={Colors.primary} />
+              </View>
+            ) : (
+              <View style={styles.tryBadge}>
+                <LinearGradient colors={Gradients.primary as any} style={styles.tryBadgeGrad}>
+                  <Text style={styles.tryBadgeText}>{t('common.try')}</Text>
+                </LinearGradient>
+              </View>
+            )
           }
           onPress={() => {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            Toast.show({ type: 'success', text1: t('profile.plusUnlocked') });
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setPremiumOpen(true);
           }}
         />
       </View>
@@ -833,6 +847,13 @@ export default function ProfileScreen({
       </TouchableOpacity>
 
       <View style={{ height: 60 }} />
+
+      <Modal visible={premiumOpen} animationType="slide" statusBarTranslucent onRequestClose={() => setPremiumOpen(false)}>
+        <PremiumScreen
+          onClose={() => setPremiumOpen(false)}
+          onPlanChanged={setPremiumPlan}
+        />
+      </Modal>
     </ScrollView>
   );
 }
@@ -903,7 +924,7 @@ const styles = StyleSheet.create({
     resizeMode: 'cover',
   },
   heroOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.35)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -960,7 +981,7 @@ const styles = StyleSheet.create({
     borderRadius: 32,
   },
   avatarOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.35)',
     borderRadius: 32,
     justifyContent: 'center',
@@ -1494,6 +1515,14 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontWeight: '800',
     fontSize: 9,
+  },
+  plusActiveBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.primaryTint,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   logoutBtn: {
     marginHorizontal: 16,

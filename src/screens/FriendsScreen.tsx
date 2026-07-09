@@ -34,6 +34,7 @@ import SentRequestsSection from '../components/SentRequestsSection';
 import FriendSuggestionsSection from '../components/FriendSuggestionsSection';
 import BlockedUsersSheet from '../components/BlockedUsersSheet';
 import FriendActionsSheet from '../components/FriendActionsSheet';
+import ConversationsSection, { type OpenChatParams } from '../components/ConversationsSection';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -41,13 +42,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 interface FriendsScreenProps {
   onFriendTap: (f: Friend) => void;
-  onChat: (f: Friend) => void;
+  onOpenChat: (params: OpenChatParams) => void;
   onAdd: () => void;
 }
 
 type FriendView = Friend & { avatar: string; lastMsg: string; lastTime: string };
 
-export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScreenProps) {
+export default function FriendsScreen({ onFriendTap, onOpenChat, onAdd }: FriendsScreenProps) {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [query, setQuery] = useState('');
@@ -246,6 +247,7 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={() => (
           <View>
+            <ConversationsSection onOpenChat={onOpenChat} />
             <FriendRequestsSection
               requests={friendRequests}
               onAccept={handleAcceptRequest}
@@ -267,7 +269,7 @@ export default function FriendsScreen({ onFriendTap, onChat, onAdd }: FriendsScr
             <TouchableOpacity
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                onChat(f);
+                onOpenChat({ userId: f.id, title: f.name, avatarUrl: f.avatar });
               }}
               onLongPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
