@@ -1,13 +1,18 @@
 import React, { useRef, useEffect, useState } from 'react';
 import {
   View, Text, Modal, TouchableOpacity, StyleSheet, Animated,
-  StatusBar, Platform,
+  StatusBar, Platform, Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { Colors, Gradients, Shadows } from '../constants/colors';
 import { useI18n } from '../i18n';
 import Toast from 'react-native-toast-message';
+import * as ImagePicker from 'expo-image-picker';
+import { uploadMedia } from '../services/mediaApi';
+import { createPost } from '../services/postApi';
+import { getNearbyPlaces, pickClosestPlace, PlaceResult } from '../services/placeApi';
 
 interface CameraSheetProps {
   locationGranted: boolean;
@@ -18,6 +23,11 @@ interface CameraSheetProps {
 export default function CameraSheet({ locationGranted, onClose, onRequestLocation }: CameraSheetProps) {
   const { t } = useI18n();
   const [captured, setCaptured] = useState(false);
+  const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
+  const [posting, setPosting] = useState(false);
+  const [nearestPlace, setNearestPlace] = useState<PlaceResult | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [resolvingPlace, setResolvingPlace] = useState(false);
   const slideAnim = useRef(new Animated.Value(800)).current;
 
   const useNativeDriver = Platform.OS !== 'web';
@@ -31,6 +41,62 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
     }).start();
   }, [slideAnim, useNativeDriver]);
 
+  // Khi được cấp quyền vị trí, lấy toạ độ GPS rồi tìm địa điểm gần nhất
+  useEffect(() => {
+    if (!locationGranted) {
+      setNearestPlace(null);
+      return;
+    }
+
+    let isMounted = true;
+
+    const resolvePlace = async () => {
+      setResolvingPlace(true);
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          if (isMounted) setResolvingPlace(false);
+          return;
+        }
+
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        if (isMounted) {
+          setCurrentLocation({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        }
+
+        const places = await getNearbyPlaces(
+          position.coords.latitude,
+          position.coords.longitude
+        );
+        const closest = pickClosestPlace(places);
+
+        if (isMounted) setNearestPlace(closest);
+      } catch (error) {
+        if (isMounted) {
+          Toast.show({
+            type: 'error',
+            text1: t('cam.locationError') || 'Location error',
+            text2: error instanceof Error ? error.message : 'Could not resolve nearby place.',
+          });
+        }
+      } finally {
+        if (isMounted) setResolvingPlace(false);
+      }
+    };
+
+    resolvePlace();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [locationGranted, t]);
+
   const close = () => {
     Animated.timing(slideAnim, {
       toValue: 800,
@@ -38,6 +104,157 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
       useNativeDriver,
     }).start(onClose);
   };
+
+  const pickImageFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Toast.show({ type: 'error', text1: t('cam.galleryPermission') || 'Permission required', text2: t('cam.galleryPermissionDesc') || 'Allow gallery access to choose an image.' });
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if ('canceled' in result && !result.canceled && result.assets?.[0]?.uri) {
+      setSelectedImageUri(result.assets[0].uri);
+      setCaptured(true);
+    }
+  };
+
+  const takePhoto = async () => {
+    if (Platform.OS === 'web') {
+      await pickImageFromLibrary();
+      return;
+    }
+
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Toast.show({ type: 'error', text1: t('cam.cameraPermission') || 'Permission required', text2: t('cam.cameraPermissionDesc') || 'Allow camera access to take a photo.' });
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if ('canceled' in result && !result.canceled && result.assets?.[0]?.uri) {
+      setSelectedImageUri(result.assets[0].uri);
+      setCaptured(true);
+    }
+  };
+
+  // Xây dựng FormData chứa file ảnh, xử lý khác nhau giữa Web và Mobile.
+  // Trên Mobile (Android/iOS): dùng object {uri, name, type} như bình thường.
+  // Trên Web: uri là dạng blob:/data:, cần fetch về Blob thật thì server mới nhận đúng file.
+  const buildImageFormData = async (uri: string, fileName: string, fileType: string) => {
+    const formData = new FormData();
+
+    if (Platform.OS === 'web') {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      formData.append('file', blob, fileName);
+    } else {
+      formData.append('file', {
+        uri,
+        name: fileName,
+        type: fileType,
+      } as any);
+    }
+
+    return formData;
+  };
+
+  // Nút "Đăng ngay": upload media -> lấy id -> tạo post với mediaId + placeId
+  const handlePostNow = async () => {
+    if (!locationGranted) {
+      onRequestLocation();
+      return;
+    }
+
+    if (!selectedImageUri) {
+      Toast.show({ type: 'error', text1: t('cam.noImage') || 'Chưa chọn hình', text2: t('cam.chooseImageFirst') || 'Choose an image before posting.' });
+      return;
+    }
+
+      try {
+      setPosting(true);
+
+      // 1) Upload ảnh lên media API -> lấy mediaId
+      const fileName = selectedImageUri.split('/').pop() || 'photo.jpg';
+      const fileType = fileName.includes('.') ? `image/${fileName.split('.').pop()}` : 'image/jpeg';
+      const formData = await buildImageFormData(selectedImageUri, fileName, fileType);
+
+      const uploadResult = await uploadMedia(formData);
+      if (!uploadResult || !uploadResult.id) {
+        throw new Error('Media upload returned invalid id');
+      }
+      const mediaId = uploadResult.id;
+
+      let latitude = currentLocation?.latitude ?? nearestPlace?.latitude;
+      let longitude = currentLocation?.longitude ?? nearestPlace?.longitude;
+      const placeId = nearestPlace?.id;
+
+      if (latitude === undefined || longitude === undefined) {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const position = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            });
+            latitude = position.coords.latitude;
+            longitude = position.coords.longitude;
+            setCurrentLocation({ latitude, longitude });
+          }
+        } catch {
+          // ignore; we'll validate below
+        }
+      }
+
+      const payload: any = {
+        caption: t('cam.defaultCaption') || 'Shared from MYMO',
+        postType: 'Image',
+        visibility: 'Public',
+        mediaIds: [mediaId],
+      };
+
+      if (placeId) {
+        payload.placeId = placeId;
+      }
+
+      if (latitude !== undefined && longitude !== undefined) {
+        payload.latitude = latitude;
+        payload.longitude = longitude;
+      }
+
+      if (!payload.placeId && (payload.latitude === undefined || payload.longitude === undefined)) {
+        Toast.show({
+          type: 'error',
+          text1: t('cam.locationRequired') || 'Cần placeId hoặc tọa độ để đăng bài.',
+          text2: t('cam.locationRequiredDesc') || 'Vui lòng bật vị trí hoặc chọn địa điểm.',
+        });
+        setPosting(false);
+        return;
+      }
+
+      await createPost(payload);
+
+      Toast.show({ type: 'success', text1: t('cam.posted'), text2: t('cam.postedDesc') });
+      setPosting(false);
+      close();
+    } catch (error) {
+      setPosting(false);
+      Toast.show({ type: 'error', text1: String(error instanceof Error ? error.message : 'Upload failed') });
+    }
+  };
+
+  const locationLabel = resolvingPlace
+    ? (t('cam.locating') || 'Đang định vị...')
+    : nearestPlace?.name || t('cam.live') || 'Vị trí trực tiếp đang bật';
 
   return (
     <Modal transparent={false} animationType="none" statusBarTranslucent>
@@ -52,11 +269,11 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
           <View style={styles.locationBadge}>
             <Ionicons name="location" size={12} color={Colors.primaryLight} />
             <Text style={styles.locationText}>
-              {locationGranted ? t('cam.live') : t('cam.locOff')}
+              {locationGranted ? locationLabel : t('cam.locOff')}
             </Text>
           </View>
           <TouchableOpacity
-            onPress={() => Toast.show({ type: 'info', text1: t('cam.gallery'), text2: t('cam.galleryDesc') })}
+            onPress={pickImageFromLibrary}
             style={styles.topBtn}
           >
             <Ionicons name="images-outline" size={22} color={Colors.white} />
@@ -100,7 +317,9 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
           {locationGranted && !captured && (
             <View style={styles.geoTag}>
               <Ionicons name="location" size={13} color={Colors.primaryLight} />
-              <Text style={styles.geoTagText}>Sunset Blvd · {t('common.now')}</Text>
+              <Text style={styles.geoTagText}>
+                {nearestPlace?.name || 'Sunset Blvd'} · {t('common.now')}
+              </Text>
             </View>
           )}
         </View>
@@ -116,7 +335,7 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
                 <Ionicons name="sparkles" size={22} color={Colors.white} />
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => setCaptured(true)}
+                onPress={takePhoto}
                 style={styles.shutterOuter}
                 activeOpacity={0.85}
               >
@@ -132,25 +351,21 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
           ) : (
             <View style={styles.postActions}>
               <TouchableOpacity
-                onPress={() => {
-                  if (locationGranted) {
-                    Toast.show({ type: 'success', text1: t('cam.posted'), text2: t('cam.postedDesc') });
-                    close();
-                  } else {
-                    onRequestLocation();
-                  }
-                }}
+                onPress={handlePostNow}
                 activeOpacity={0.85}
-                style={styles.postBtn}
+                style={[styles.postBtn, posting && styles.postBtnDisabled]}
+                disabled={posting}
               >
                 <LinearGradient colors={Gradients.primary} style={styles.postBtnGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
                   <Ionicons name="send" size={16} color={Colors.white} />
-                  <Text style={styles.postBtnText}>{t('cam.postNow')}</Text>
+                  <Text style={styles.postBtnText}>{posting ? t('cam.uploading') || 'Uploading...' : t('cam.postNow')}</Text>
                 </LinearGradient>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => {
-                  Toast.show({ type: 'success', text1: t('cam.saved') });
+                  if (selectedImageUri) {
+                    Toast.show({ type: 'success', text1: t('cam.saved') });
+                  }
                   close();
                 }}
                 style={styles.saveBtn}
@@ -159,7 +374,7 @@ export default function CameraSheet({ locationGranted, onClose, onRequestLocatio
                 <Ionicons name="download-outline" size={16} color={Colors.white} />
                 <Text style={styles.saveBtnText}>{t('cam.save')}</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setCaptured(false)} style={styles.retakeBtn}>
+              <TouchableOpacity onPress={() => { setCaptured(false); setSelectedImageUri(null); }} style={styles.retakeBtn}>
                 <Text style={styles.retakeBtnText}>{t('common.retake')}</Text>
               </TouchableOpacity>
             </View>
@@ -327,6 +542,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     ...Shadows.glow,
+  },
+  postBtnDisabled: {
+    opacity: 0.5,
   },
   postBtnGrad: {
     flexDirection: 'row',
