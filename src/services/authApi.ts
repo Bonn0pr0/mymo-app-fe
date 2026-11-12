@@ -129,12 +129,21 @@ export async function registerUser(payload: RegisterPayload): Promise<AuthRespon
   return requestJson<AuthResponse>('/register', payload);
 }
 
-export async function sendRegisterOtp(email: string): Promise<void> {
-  await requestJson<unknown>('/send-register-otp', { email: email.trim() });
+function readDevCode(raw: unknown): string | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const record = raw as Record<string, unknown>;
+  const code = record.devCode ?? record.DevCode;
+  return typeof code === 'string' ? code : null;
 }
 
-export async function sendResetOtp(email: string): Promise<void> {
-  await requestJson<unknown>('/send-reset-otp', { email: email.trim() });
+export async function sendRegisterOtp(email: string): Promise<string | null> {
+  const raw = await requestJson<Record<string, unknown>>('/send-register-otp', { email: email.trim() });
+  return readDevCode(raw);
+}
+
+export async function sendResetOtp(email: string): Promise<string | null> {
+  const raw = await requestJson<Record<string, unknown>>('/send-reset-otp', { email: email.trim() });
+  return readDevCode(raw);
 }
 
 export async function resetPassword(payload: {

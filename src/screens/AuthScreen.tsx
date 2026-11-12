@@ -84,8 +84,8 @@ export default function AuthScreen({
     }
     try {
       setOtpSending(true);
-      await sendRegisterOtp(email.trim());
-      Toast.show({ type: 'success', text1: t('auth.otpSent'), text2: email.trim() });
+      const code = await sendRegisterOtp(email.trim());
+      Toast.show({ type: 'success', text1: t('auth.otpSent'), text2: code ?? email.trim() });
     } catch (error) {
       const message = error instanceof Error ? error.message : t('auth.otpSendError');
       Toast.show({ type: 'error', text1: message });
@@ -101,9 +101,9 @@ export default function AuthScreen({
     }
     try {
       setOtpSending(true);
-      await sendResetOtp(email.trim());
+      const code = await sendResetOtp(email.trim());
       setForgotStep('otp');
-      Toast.show({ type: 'success', text1: t('auth.otpSent'), text2: email.trim() });
+      Toast.show({ type: 'success', text1: t('auth.otpSent'), text2: code ?? email.trim() });
     } catch (error) {
       const message = error instanceof Error ? error.message : t('auth.otpSendError');
       Toast.show({ type: 'error', text1: message });
@@ -186,10 +186,10 @@ export default function AuthScreen({
     try {
       setIsSubmitting(true);
       if (mode === 'register' && registerStep === 'form') {
-        await sendRegisterOtp(email.trim());
+        const code = await sendRegisterOtp(email.trim());
         setOtpCode('');
         setRegisterStep('otp');
-        Toast.show({ type: 'success', text1: t('auth.otpSent'), text2: email.trim() });
+        Toast.show({ type: 'success', text1: t('auth.otpSent'), text2: code ?? email.trim() });
         return;
       }
       if (mode === 'register') {
