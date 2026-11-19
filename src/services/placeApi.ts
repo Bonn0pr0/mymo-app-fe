@@ -193,10 +193,6 @@ function normalizePlaceSummary(raw: Record<string, unknown>): PlaceSummary {
       raw.isOwnedByCurrentUser ?? raw.IsOwnedByCurrentUser ?? false,
     ),
     adPackageId: (raw.adPackageId ?? raw.AdPackageId ?? null) as string | null,
-    model3DKey: (raw.model3DKey ?? raw.Model3DKey ?? null) as string | null,
-    model3DUrl: absoluteModelUrl(
-      (raw.model3DUrl ?? raw.Model3DUrl ?? null) as string | null,
-    ),
   };
 }
 
@@ -261,6 +257,8 @@ function normalizePlaceDetail(raw: Record<string, unknown>): PlaceDetail {
     longitude: Number(raw.longitude ?? raw.Longitude ?? 0),
     openingHours: (raw.openingHours ?? raw.OpeningHours ?? null) as string | null,
     thumbnailUrl: (raw.thumbnailUrl ?? raw.ThumbnailUrl ?? null) as string | null,
+    model3DKey: (raw.model3DKey ?? raw.Model3DKey ?? null) as string | null,
+    model3DUrl: absoluteModelUrl((raw.model3DUrl ?? raw.Model3DUrl ?? null) as string | null),
     averageRating: Number(raw.averageRating ?? raw.AverageRating ?? 0),
     reviewCount: Number(raw.reviewCount ?? raw.ReviewCount ?? 0),
     checkInCount: Number(raw.checkInCount ?? raw.CheckInCount ?? 0),

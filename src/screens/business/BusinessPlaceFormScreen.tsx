@@ -63,8 +63,8 @@ export default function BusinessPlaceFormScreen({
     try {
       setUploading(true);
       const asset = picked.assets[0];
-      const meta = guessImageMeta(asset.uri, asset.mimeType);
-      const fd = buildImageFormData(asset.uri, meta.fileName, meta.mimeType);
+      const meta = guessImageMeta(asset.uri, asset.fileName ?? 'photo.jpg');
+      const fd = await buildImageFormData(asset.uri, meta.fileName, asset.mimeType ?? meta.fileType);
       const uploaded = await uploadMedia(fd);
       const url = uploaded.url ?? (uploaded as { Url?: string }).Url;
       if (!url) throw new Error('No URL returned from upload');

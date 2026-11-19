@@ -90,7 +90,7 @@ export default function FriendProfileScreen({
   const name = profile?.displayName || initialName || t('friends.someone');
   const avatar = avatarUri(profile?.avatarUrl || initialAvatar);
   const status = friendStatus?.status.toLowerCase() ?? 'none';
-  const isFriend = status === 'accepted';
+  const isFriend = status === 'accepted' || status === 'friends';
   const isIncomingRequest = status === 'pending' && friendStatus?.isIncoming;
   const isOutgoingRequest = status === 'pending' && !friendStatus?.isIncoming;
 

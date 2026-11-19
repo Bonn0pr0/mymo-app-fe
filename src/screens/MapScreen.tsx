@@ -49,8 +49,8 @@ import { getUserProfile } from '../services/userApi';
 import { hasActivePremium } from '../utils/premiumStorage';
 import type { MapGeocodeResult } from '../services/mapGeocodingApi';
 import * as Haptics from 'expo-haptics';
+import Toast from 'react-native-toast-message';
 import { getStoredAuthSession, getAuthUserId } from '../services/authApi';
-import { getUserProfile } from '../services/userApi';
 import { dedupeMapPlaces } from '../utils/dedupeMapPlaces';
 import { placesForMarkerPaint, sortPlacesByPromotion } from '../utils/mapPlacePromotion';
 import {

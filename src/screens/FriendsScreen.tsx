@@ -34,6 +34,7 @@ import FriendMomentsSection from '../components/FriendMomentsSection';
 import FriendRequestsSection from '../components/FriendRequestsSection';
 import SentRequestsSection from '../components/SentRequestsSection';
 import FriendSuggestionsSection from '../components/FriendSuggestionsSection';
+import FriendsListSection from '../components/FriendsListSection';
 import BlockedUsersSheet from '../components/BlockedUsersSheet';
 import FriendActionsSheet from '../components/FriendActionsSheet';
 import ConversationsSection, { type OpenChatParams } from '../components/ConversationsSection';
@@ -307,6 +308,32 @@ export default function FriendsScreen({ onFriendTap, onOpenChat, onViewProfile, 
           <SentRequestsSection
             requests={sentRequests}
             onCancel={handleCancelSent}
+          />
+          <FriendsListSection
+            friends={friends}
+            onlineUserIds={onlineUserIds}
+            onOpenChat={onOpenChat}
+            onViewProfile={onViewProfile}
+            onManage={friend => {
+              const known = friendsWithStatus.find(f => f.id === friend.userId);
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              showFriendActions(known || {
+                id: friend.userId,
+                name: friend.displayName || friend.username,
+                emoji: '👋',
+                color: '#7CC4FF',
+                place: 'Friend',
+                distance: 'Online',
+                status: onlineUserIds.has(friend.userId) ? 'active' : 'idle',
+                battery: 100,
+                x: 0,
+                y: 0,
+                avatar: avatarUri(friend.avatarUrl),
+                lastMsg: '',
+                lastTime: '',
+              });
+            }}
+            emptyLabel={t('friends.noFriends')}
           />
           <FriendSuggestionsSection
             suggestions={suggestions}

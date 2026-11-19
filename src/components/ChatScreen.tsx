@@ -134,7 +134,10 @@ export default function ChatScreen({
     }
     setIsFriend(null);
     getFriendStatus(peerUserId)
-      .then(result => setIsFriend(result.status.toLowerCase() === 'accepted'))
+      .then(result => {
+        const s = (result.status || '').toLowerCase();
+        setIsFriend(s === 'accepted' || s === 'friends');
+      })
       .catch(() => setIsFriend(false));
   }, [peerUserId]);
 
